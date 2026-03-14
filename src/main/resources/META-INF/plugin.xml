@@ -1,0 +1,28 @@
+<idea-plugin>
+    <id>com.forcepushdev.preflight</id>
+    <name>Preflight</name>
+    <vendor>forcepushdev</vendor>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.vcs</depends>
+    <depends>Git4Idea</depends>
+
+    <resource-bundle>messages.MyBundle</resource-bundle>
+
+    <projectListeners>
+        <listener class="com.forcepushdev.preflight.services.BranchChangeListener"
+                  topic="git4idea.repo.GitRepositoryChangeListener"/>
+    </projectListeners>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            factoryClass="com.forcepushdev.preflight.toolWindow.PreflightToolWindowFactory"
+            id="Preflight"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.BranchDiffService"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.CommentStore"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.MainEditorCommentHandler"/>
+    </extensions>
+</idea-plugin>
