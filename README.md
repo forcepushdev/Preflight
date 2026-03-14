@@ -96,6 +96,8 @@ I vibe-coded this plugin. Never built an IntelliJ plugin before, had no idea how
 
 The irony isn't lost on me. I built a review tool to for my production code by vibe coding XD.
 
+---
+## Plugin stuff, no NOT remove!
 
 <!-- Plugin description -->
 Review your AI Agents changes locally.
