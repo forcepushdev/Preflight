@@ -23,7 +23,7 @@ There's no good solution.
 So I built one.
 
 ---
-![img_1.png](img_1.png)
+![img.png](img.png)
 ## What This Plugin Does
 
 Leave comments directly in your editor without touching your code.
@@ -103,7 +103,7 @@ The irony isn't lost on me. I built a review tool to for my production code by v
 Review your AI Agents changes locally.
 
 
-This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
+This specific seok im ction is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
 
 To keep everything working, do not remove `<!-- ... -->` sections.
 <!-- Plugin description end -->
