@@ -104,7 +104,7 @@ The irony isn't lost on me. I built a review tool to for my production code by v
 Review your AI Agents changes locally.
 
 
-This specific seok im ction is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
+This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
 
 To keep everything working, do not remove `<!-- ... -->` sections.
 <!-- Plugin description end -->
