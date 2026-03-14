@@ -91,6 +91,7 @@ Open an issue or a PR, this is early and feedback shapes where it goes.
 ---
 
 ## Why I Built This
+Because I want to review my agents code locally.
 
 I vibe-coded this plugin. Never built an IntelliJ plugin before, had no idea how, asked Claude and just went for it.
 
