@@ -1,17 +1,16 @@
 package com.forcepushdev.preflight.services
 
-import com.forcepushdev.preflight.services.BranchDiffService
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonDeserializationContext
 import com.google.gson.JsonDeserializer
 import com.google.gson.JsonElement
 import com.google.gson.reflect.TypeToken
-import java.lang.reflect.Type
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.io.File
+import java.lang.reflect.Type
 
 @Service(Service.Level.PROJECT)
 class CommentStore(private val project: Project) {
@@ -23,19 +22,25 @@ class CommentStore(private val project: Project) {
     private val comments: MutableList<PreflightComment> = loadFromDisk().toMutableList()
 
     internal var currentBranchOverride: String? = null
+    internal var branchFilterOverride: Boolean? = null
 
     private fun currentBranch(): String =
         currentBranchOverride ?: project.service<BranchDiffService>().getRepository()?.currentBranchName ?: ""
 
     private fun isVisibleInCurrentBranch(comment: PreflightComment): Boolean {
+        if (!isBranchFilterEnabled()) return true
         val branch = currentBranch()
         return comment.branch == branch || comment.branch == ""
     }
 
+    private fun isBranchFilterEnabled(): Boolean =
+        branchFilterOverride ?: project.service<ConfigStore>().load().branchFilter
+
     fun addComment(comment: PreflightComment) {
         reload()
         comments.removeAll { it.file == comment.file && it.line == comment.line }
-        comments.add(comment.copy(branch = comment.branch.ifEmpty { currentBranch() }))
+        val branch = if (isBranchFilterEnabled()) comment.branch.ifEmpty { currentBranch() } else ""
+        comments.add(comment.copy(branch = branch))
         saveToDisk()
     }
 

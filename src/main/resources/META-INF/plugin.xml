@@ -23,6 +23,8 @@
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.CommentStore"/>
         <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.ConfigStore"/>
+        <projectService
             serviceImplementation="com.forcepushdev.preflight.services.MainEditorCommentHandler"/>
     </extensions>
 </idea-plugin>

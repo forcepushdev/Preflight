@@ -156,13 +156,16 @@ class CommentStoreTest : BasePlatformTestCase() {
     }
 
     fun testAddComment_setsBranchFromCurrentBranch() {
+        store.branchFilterOverride = true
         store.currentBranchOverride = "feature"
+
         store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
 
         assertEquals("feature", store.getComments()[0].branch)
     }
 
     fun testGetComments_filtersToCurrentBranch() {
+        store.branchFilterOverride = true
         store.currentBranchOverride = "feature"
         store.addComment(PreflightComment("src/Foo.kt", 1, "on feature"))
 
@@ -172,12 +175,30 @@ class CommentStoreTest : BasePlatformTestCase() {
     }
 
     fun testGetComments_includesLegacyEmptyBranch() {
+        store.branchFilterOverride = true
         store.currentBranchOverride = ""
         store.addComment(PreflightComment("src/Foo.kt", 1, "legacy"))
 
         store.currentBranchOverride = "feature"
 
         assertEquals(1, store.getComments().size)
+    }
+
+    fun testBranchFilter_disabledByDefault_allCommentsVisible() {
+        store.currentBranchOverride = "feature"
+        store.addComment(PreflightComment("src/Foo.kt", 1, "on feature"))
+        val store2 = CommentStore(project)
+        store2.currentBranchOverride = "main"
+
+        assertEquals(1, store2.getComments().size)
+    }
+
+    fun testBranchFilter_disabled_storesBranchAsEmpty() {
+        store.currentBranchOverride = "feature"
+
+        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
+
+        assertEquals("", store.getComments()[0].branch)
     }
 
     fun testReload_readsFromDisk() {
