@@ -4,20 +4,26 @@
 
 ---
 
+## Review your agents code locally
+
+No push, no additional server.
+
+---
+
 ## The Problem
 
 You're working with AI agents. 
 Claude builds a feature, refactors something, adds a layer. 
 A few prompts later you have 300 changed lines across five files, six commits, and no idea what was actually changed.
 
-Now, when reviewing the code, there is some paths to choose:
+Now, when reviewing the code you can choose:
 - push to origin and do a PR in github/azure etc.
 - write comments in the code 
-- write all comments donw in a file or promt, referencing the files you mean
+- write all comments in a file or promt, referencing the files
 
-Thats not how I want do do that. I don't want to push this slop to main to do a review and then maybe copy my comments again.
-I also don't want to remove 20 Comments when I'm done.
-And I don't want to reference 20 Files in a promt.
+That's not how I want do do that. I don't want to push this slop to main to do a review and then maybe copy my comments again.
+I also don't want to remove 20 comments when I'm done.
+And I don't want to reference the files in a promt.
 
 There's no good solution.
 So I built one.
@@ -35,22 +41,25 @@ Leave comments directly in your editor without touching your code.
 
 Your codebase stays clean. Your reviews stay yours.
 
+### !! You currently have to commit to be able to see the changes in Preflight !!
+
 ---
 
 
 
-## Why Local JSON?
+## Why local JSON?
 
-Because I don't want to push to some server, I don't wanted to push to origin to make a PR in github or azure, I just 
-want this to be between me and the agent.
+Because I don't want to push to some server, I don't wanted to push to origin to make a PR in github or azure.
+
+I just want this to be between me and the agent.
 
 The JSON format is designed to be readable by AI agents. Hook it up to your agent, just explain the format and handover the json.
-(Claude code PLUGIN in planning)
+(Claude code PLUGIN planned)
 ---
 
 ## Installation
 
-Plugin Marketplace in planning.
+Plugin Marketplace release planned.
 For now, build from source:
 
 ```bash
@@ -75,11 +84,11 @@ Known issues:
 ---
 
 ## Roadmap
-
-- [ ] Better branch switching support
+- [ ] Comment without commit
 - [ ] Claude Code Plugin
-- [ ] IntelliJ Marketplace Plugin
 - [ ] VS Code Extension
+- [ ] branch switching support
+- [ ] IntelliJ Marketplace Plugin
 
 ---
 
@@ -93,8 +102,7 @@ Open an issue or a PR, this is early and feedback shapes where it goes.
 ## Why I Built This
 Because I want to review my agents code locally.
 
-I vibe-coded this plugin. Never built an IntelliJ plugin before, had no idea how, asked Claude and just went for it.
-
+I vibe-coded this plugin.
 The irony isn't lost on me. I built a review tool to for my production code by vibe coding XD.
 
 ---
