@@ -81,6 +81,28 @@ Known issues:
 - Branch switching can cause annotation offsets
 - Line numbers shift when code changes after annotations are added
 
+Currently there is no agent plugin, I use this prompt:
+```
+you got a new review in .preflight/comments.json, the format is                                                                
+[                                         
+  {                                        
+    "file": "FILEPATH",                                             
+    "line": INT,                                
+    "comment": "REVIEWER COMMENT",              
+    "resolved": false,                         
+    "replies": [                                
+      "HERE IS A REPLY, you can put your reply here. Maybe there is a conversation already "                                     
+    ],                                          
+    "startLine": INT                            
+  }                                             
+]                                                                                                                                
+startline is the line where the comment starts, endline where it ends.
+please solve the review commands, if you think the comment is wrong answer in the replies.                                       
+Replies is a list of replies {"text" :"THE TEXT", "author": "author"} use author AGENT.                                          
+When you solved the comments reply with "solved", do not set the resolved property.                                                                                
+if the line numbers need update because you changed files, update them. 
+```
+
 ---
 
 ## Roadmap
