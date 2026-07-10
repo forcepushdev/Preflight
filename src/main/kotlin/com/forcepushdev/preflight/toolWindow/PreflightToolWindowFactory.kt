@@ -181,9 +181,14 @@ private class PreflightPanel(
     init {
         val toolbar = ActionManager.getInstance().createActionToolbar(
             "Preflight",
-            DefaultActionGroup(object : AnAction("Refresh", "Reload changed files", AllIcons.Actions.Refresh) {
-                override fun actionPerformed(e: AnActionEvent) = refresh()
-            }),
+            DefaultActionGroup(
+                object : AnAction("Refresh", "Reload changed files", AllIcons.Actions.Refresh) {
+                    override fun actionPerformed(e: AnActionEvent) = refresh()
+                },
+                object : AnAction("Reload Comments", "Re-read .preflight/comments.json from disk", AllIcons.Actions.BuildLoadChanges) {
+                    override fun actionPerformed(e: AnActionEvent) = reloadComments()
+                }
+            ),
             true
         ).also { it.targetComponent = this }
 
@@ -248,6 +253,12 @@ private class PreflightPanel(
         gutterHandler.attach(editor, file, disposable)
         currentInlayManager?.refresh()
         project.service<MainEditorCommentHandler>().refreshFile(file)
+        refresh()
+    }
+
+    private fun reloadComments() {
+        project.service<MainEditorCommentHandler>().refreshAllInlays()
+        currentInlayManager?.refresh()
         refresh()
     }
 
