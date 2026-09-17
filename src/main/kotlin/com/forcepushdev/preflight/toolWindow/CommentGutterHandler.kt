@@ -6,6 +6,8 @@ import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.editor.event.CaretEvent
+import com.intellij.openapi.editor.event.CaretListener
 import com.intellij.openapi.editor.event.SelectionEvent
 import com.intellij.openapi.editor.event.SelectionListener
 import com.intellij.openapi.editor.ex.EditorEx
@@ -18,7 +20,9 @@ class CommentGutterHandler(
     private val store: CommentStore,
     private val onCommentAdded: () -> Unit
 ) {
-    private var selectionHighlighter: RangeHighlighter? = null
+    private var plusHighlighter: RangeHighlighter? = null
+    private var plusHighlighterStartLine: Int = -1
+    private var plusHighlighterEndLine: Int = -1
     private val commentHighlighters = mutableListOf<RangeHighlighter>()
     private var currentEditor: EditorEx? = null
     private var currentFile: String = ""
@@ -32,26 +36,46 @@ class CommentGutterHandler(
         if (isNewEditor) {
             editor.selectionModel.addSelectionListener(object : SelectionListener {
                 override fun selectionChanged(e: SelectionEvent) {
-                    selectionHighlighter?.let { editor.markupModel.removeHighlighter(it) }
-                    selectionHighlighter = null
-                    if (e.newRange.length > 0) {
-                        val startLine = editor.document.getLineNumber(e.newRange.startOffset)
-                        val endLine = editor.document.getLineNumber(
-                            (e.newRange.endOffset - 1).coerceAtLeast(0)
-                        )
-                        selectionStartLine = startLine
-                        selectionHighlighter = addPlusHighlighter(editor, startLine, endLine)
-                    }
+                    updatePlusIcon(editor)
                 }
             }, disposable)
+            editor.caretModel.addCaretListener(object : CaretListener {
+                override fun caretPositionChanged(e: CaretEvent) {
+                    updatePlusIcon(editor)
+                }
+            }, disposable)
+            updatePlusIcon(editor)
         }
     }
 
     fun detach(editor: EditorEx) {
-        selectionHighlighter?.let { editor.markupModel.removeHighlighter(it) }
-        selectionHighlighter = null
+        plusHighlighter?.let { editor.markupModel.removeHighlighter(it) }
+        plusHighlighter = null
+        plusHighlighterStartLine = -1
+        plusHighlighterEndLine = -1
         clearCommentHighlighters(editor)
         if (currentEditor == editor) currentEditor = null
+    }
+
+    private fun updatePlusIcon(editor: EditorEx) {
+        val selectionModel = editor.selectionModel
+        val startLine: Int
+        val endLine: Int
+        if (selectionModel.hasSelection()) {
+            startLine = editor.document.getLineNumber(selectionModel.selectionStart)
+            endLine = editor.document.getLineNumber(
+                (selectionModel.selectionEnd - 1).coerceAtLeast(0)
+            )
+        } else {
+            startLine = editor.caretModel.logicalPosition.line
+            endLine = startLine
+        }
+        selectionStartLine = startLine
+        if (startLine == plusHighlighterStartLine && endLine == plusHighlighterEndLine && plusHighlighter != null) return
+        plusHighlighter?.let { editor.markupModel.removeHighlighter(it) }
+        plusHighlighter = addPlusHighlighter(editor, startLine, endLine)
+        plusHighlighterStartLine = startLine
+        plusHighlighterEndLine = endLine
     }
 
     private fun addPlusHighlighter(editor: EditorEx, startLine: Int, endLine: Int): RangeHighlighter {
