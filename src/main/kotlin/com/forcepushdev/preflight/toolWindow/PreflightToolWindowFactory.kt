@@ -1,7 +1,10 @@
 package com.forcepushdev.preflight.toolWindow
 
 import com.forcepushdev.preflight.services.BranchDiffService
+import com.forcepushdev.preflight.services.CommentAnchorRegistry
 import com.forcepushdev.preflight.services.CommentStore
+import com.forcepushdev.preflight.services.CommitInfo
+import com.forcepushdev.preflight.services.DiffBase
 import com.forcepushdev.preflight.services.MainEditorCommentHandler
 import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.impl.DiffRequestProcessor
@@ -10,6 +13,8 @@ import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.diff.tools.util.side.TwosideTextDiffViewer
 import com.intellij.diff.util.DiffUserDataKeysEx
 import com.intellij.icons.AllIcons
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -22,6 +27,7 @@ import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.vcs.changes.Change
 import com.intellij.openapi.wm.ToolWindow
@@ -38,16 +44,26 @@ import com.intellij.ui.treeStructure.Tree
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
-import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import com.intellij.util.ui.JBUI
 import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JTabbedPane
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreePath
 import javax.swing.tree.TreeSelectionModel
 
 private data class BranchLeaf(val fullName: String, val displayName: String)
+private data class CommitLeaf(val sha: String, val subject: String, val commitEpochSeconds: Long)
+
+private const val DIFF_BASE_POPUP_DIMENSION_KEY = "Preflight.DiffBasePopup"
+
+private fun updateDiffBaseButton(button: JButton, diffBase: DiffBase) {
+    button.text = formatDiffBaseLabel(diffBase)
+    button.toolTipText = formatDiffBaseTooltip(diffBase)
+}
 
 class PreflightToolWindowFactory : ToolWindowFactory {
 
@@ -82,9 +98,12 @@ private class PreflightPanel(
         selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
         cellRenderer = FileChangeTreeCellRenderer(project.service<CommentStore>(), project.basePath ?: "")
     }
-    private var selectedBaseBranch: String = service.getMainBranch()
+    private var selectedDiffBase: DiffBase = DiffBase.Branch(service.getMainBranch())
+    private var lastActiveBaseBranch: String = service.getMainBranch()
+    private var lastSelectedCommitSha: String? = null
+    private var lastActiveDiffBaseTabIndex: Int = 0
     private var currentRepo = service.getRepository()
-    private var currentMergeBase: String? = null
+    private var currentRevision: String? = null
     private var diffProcessor = PreflightDiffProcessor().also { Disposer.register(disposable, it) }
     private val diffFile = PreflightDiffFile()
     private val commentStore = project.service<CommentStore>()
@@ -94,9 +113,10 @@ private class PreflightPanel(
     private var currentInlayManager: CommentInlayManager? = null
     private var currentRemoteBranches: List<String> = emptyList()
     private var currentLocalBranches: List<String> = emptyList()
-    private val branchButton = JButton(selectedBaseBranch).apply {
-        addActionListener { showBranchPopup() }
-    }
+    private var currentCommits: List<CommitInfo> = emptyList()
+    private val diffBaseButton = JButton().apply {
+        addActionListener { showDiffBasePopup() }
+    }.also { updateDiffBaseButton(it, selectedDiffBase) }
 
     private fun buildBranchPopupTree(): DefaultMutableTreeNode {
         val root = DefaultMutableTreeNode()
@@ -140,33 +160,109 @@ private class PreflightPanel(
         return root
     }
 
-    private fun showBranchPopup() {
-        val root = buildBranchPopupTree()
-        val tree = Tree(DefaultTreeModel(root)).apply {
+    private fun buildCommitPopupTree(): DefaultMutableTreeNode {
+        val root = DefaultMutableTreeNode()
+        if (currentCommits.isEmpty()) {
+            root.add(DefaultMutableTreeNode("Keine Commits seit main"))
+        } else {
+            for (commit in currentCommits) {
+                root.add(DefaultMutableTreeNode(CommitLeaf(commit.sha, commit.subject, commit.commitEpochSeconds)))
+            }
+        }
+        return root
+    }
+
+    /** Selects the tree node matching [predicate] without firing any selection listener — call
+     * before listeners are attached, so restoring the last pick doesn't itself trigger a refresh. */
+    private fun restoreSelection(tree: Tree, predicate: (Any?) -> Boolean) {
+        val root = tree.model.root as? DefaultMutableTreeNode ?: return
+        val enumeration = root.depthFirstEnumeration()
+        while (enumeration.hasMoreElements()) {
+            val node = enumeration.nextElement() as? DefaultMutableTreeNode ?: continue
+            if (predicate(node.userObject)) {
+                val path = TreePath(node.path)
+                tree.selectionPath = path
+                tree.scrollPathToVisible(path)
+                return
+            }
+        }
+    }
+
+    private fun showDiffBasePopup() {
+        val branchTree = Tree(DefaultTreeModel(buildBranchPopupTree())).apply {
             isRootVisible = false
             cellRenderer = BranchTreeCellRenderer()
             selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+            // Fixed row height avoids Swing's variable-height row-bounds cache, which can be stale
+            // on a freshly built tree and make the first click's hit-test resolve to the wrong row.
+            rowHeight = JBUI.scale(20)
         }
         var i = 0
-        while (i < tree.rowCount) tree.expandRow(i++)
+        while (i < branchTree.rowCount) branchTree.expandRow(i++)
+        // Only pre-highlight when a Branch is actually the active diff base — if a Commit is
+        // active, lastActiveBaseBranch is just the branch we'd fall back to, not what's showing.
+        // Pre-selecting it anyway would mean clicking it (to switch back) selects a node the tree
+        // already considers selected, which fires no TreeSelectionEvent and silently does nothing.
+        restoreSelection(branchTree) {
+            selectedDiffBase is DiffBase.Branch && it is BranchLeaf && it.fullName == lastActiveBaseBranch
+        }
 
-        val scrollPane = JBScrollPane(tree).apply { preferredSize = Dimension(280, 300) }
+        val commitTree = object : Tree(DefaultTreeModel(buildCommitPopupTree())) {
+            override fun getToolTipText(event: MouseEvent): String? {
+                val path = getPathForLocation(event.x, event.y) ?: return null
+                val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return null
+                val leaf = node.userObject as? CommitLeaf ?: return null
+                return formatDiffBaseTooltip(DiffBase.Commit(leaf.sha, leaf.subject))
+            }
+        }.apply {
+            isRootVisible = false
+            cellRenderer = CommitTreeCellRenderer()
+            selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
+            rowHeight = JBUI.scale(20)
+            javax.swing.ToolTipManager.sharedInstance().registerComponent(this)
+        }
+        i = 0
+        while (i < commitTree.rowCount) commitTree.expandRow(i++)
+        restoreSelection(commitTree) {
+            selectedDiffBase is DiffBase.Commit && it is CommitLeaf && it.sha == lastSelectedCommitSha
+        }
+
+        val tabs = JTabbedPane().apply {
+            addTab("Branches", JBScrollPane(branchTree))
+            addTab("Commits", JBScrollPane(commitTree))
+            preferredSize = Dimension(320, 340)
+            selectedIndex = lastActiveDiffBaseTabIndex.coerceIn(0, tabCount - 1)
+        }
+        tabs.addChangeListener { lastActiveDiffBaseTabIndex = tabs.selectedIndex }
+
+        val focusedTree = if (tabs.selectedIndex == 1) commitTree else branchTree
         val popup = JBPopupFactory.getInstance()
-            .createComponentPopupBuilder(scrollPane, tree)
+            .createComponentPopupBuilder(tabs, focusedTree)
             .setRequestFocus(true)
+            .setResizable(true)
+            .setMinSize(Dimension(240, 200))
+            .setDimensionServiceKey(project, DIFF_BASE_POPUP_DIMENSION_KEY, true)
             .createPopup()
 
-        tree.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return
-                val leaf = node.userObject as? BranchLeaf ?: return
-                selectedBaseBranch = leaf.fullName
-                branchButton.text = leaf.fullName
-                popup.cancel()
-                refresh()
-            }
-        })
-        popup.showUnderneathOf(branchButton)
+        branchTree.addTreeSelectionListener { e ->
+            val node = e.newLeadSelectionPath?.lastPathComponent as? DefaultMutableTreeNode ?: return@addTreeSelectionListener
+            val leaf = node.userObject as? BranchLeaf ?: return@addTreeSelectionListener
+            selectedDiffBase = DiffBase.Branch(leaf.fullName)
+            lastActiveBaseBranch = leaf.fullName
+            updateDiffBaseButton(diffBaseButton, selectedDiffBase)
+            popup.cancel()
+            refresh()
+        }
+        commitTree.addTreeSelectionListener { e ->
+            val node = e.newLeadSelectionPath?.lastPathComponent as? DefaultMutableTreeNode ?: return@addTreeSelectionListener
+            val leaf = node.userObject as? CommitLeaf ?: return@addTreeSelectionListener
+            selectedDiffBase = DiffBase.Commit(leaf.sha, leaf.subject)
+            lastSelectedCommitSha = leaf.sha
+            updateDiffBaseButton(diffBaseButton, selectedDiffBase)
+            popup.cancel()
+            refresh()
+        }
+        popup.showUnderneathOf(diffBaseButton)
     }
 
     private fun buildTopPanel(toolbar: com.intellij.openapi.actionSystem.ActionToolbar): JPanel =
@@ -174,7 +270,7 @@ private class PreflightPanel(
             add(toolbar.component, BorderLayout.WEST)
             add(JPanel().apply {
                 add(JLabel("Base: "))
-                add(branchButton)
+                add(diffBaseButton)
             }, BorderLayout.EAST)
         }
 
@@ -182,11 +278,14 @@ private class PreflightPanel(
         val toolbar = ActionManager.getInstance().createActionToolbar(
             "Preflight",
             DefaultActionGroup(
-                object : AnAction("Refresh", "Reload changed files", AllIcons.Actions.Refresh) {
-                    override fun actionPerformed(e: AnActionEvent) = refresh()
-                },
-                object : AnAction("Reload Comments", "Re-read .preflight/comments.json from disk", AllIcons.Actions.BuildLoadChanges) {
+                object : AnAction("Refresh", "Reload changed files and comments", AllIcons.Actions.Refresh) {
                     override fun actionPerformed(e: AnActionEvent) = reloadComments()
+                },
+                object : AnAction("Delete All Comments", "Delete all Preflight comments", AllIcons.Actions.GC) {
+                    override fun actionPerformed(e: AnActionEvent) = deleteAllComments()
+                    override fun update(e: AnActionEvent) {
+                        e.presentation.isEnabled = commentStore.getComments().isNotEmpty()
+                    }
                 }
             ),
             true
@@ -211,12 +310,16 @@ private class PreflightPanel(
 
     private fun openDiff(change: Change) {
         val repo = currentRepo ?: return
-        val mergeBase = currentMergeBase ?: return
+        val revision = currentRevision ?: return
         val filePath = change.afterRevision?.file ?: change.beforeRevision?.file ?: return
         val relativePath = filePath.path.removePrefix(repo.root.path + "/")
+        // On a rename/move, the file lived under a different path at the base revision — reading
+        // it back by the current (after) path fails and silently yields an empty base, making a
+        // renamed file look like a brand new addition instead of showing its real prior content.
+        val baseRelativePath = change.beforeRevision?.file?.path?.removePrefix(repo.root.path + "/")
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val baseText = service.getFileContentAtRevision(relativePath, mergeBase)
+            val baseText = baseRelativePath?.let { service.getFileContentAtRevision(it, revision) } ?: ""
 
             ApplicationManager.getApplication().invokeLater {
                 if (Disposer.isDisposed(diffProcessor)) {
@@ -262,25 +365,58 @@ private class PreflightPanel(
         refresh()
     }
 
+    private fun deleteAllComments() {
+        val result = Messages.showYesNoDialog(
+            project,
+            "Delete all ${commentStore.getComments().size} comments? This cannot be undone.",
+            "Delete All Comments",
+            Messages.getWarningIcon()
+        )
+        if (result != Messages.YES) return
+        commentStore.removeAllComments()
+        reloadComments()
+    }
+
     private fun refresh() {
         ApplicationManager.getApplication().executeOnPooledThread {
             val repo = service.getRepository()
             val (remote, local) = service.getAllBranches()
-            val mergeBase = if (repo != null) service.getMergeBase(selectedBaseBranch) else null
-            val changes = if (repo != null && mergeBase != null) service.getChangedFiles(selectedBaseBranch) else emptyList()
+            val commits = service.getCommitsSinceMain()
+            val diffBaseBeforeRefresh = selectedDiffBase
+
+            val effectiveDiffBase = when (diffBaseBeforeRefresh) {
+                is DiffBase.Branch -> {
+                    val allBranches = local + remote
+                    val name = allBranches.firstOrNull { it == diffBaseBeforeRefresh.name }
+                        ?: local.firstOrNull() ?: remote.firstOrNull() ?: diffBaseBeforeRefresh.name
+                    DiffBase.Branch(name)
+                }
+                is DiffBase.Commit -> {
+                    val isReachable = repo != null && service.isAncestorOfHead(diffBaseBeforeRefresh.sha)
+                    selectEffectiveDiffBase(diffBaseBeforeRefresh, isReachable, DiffBase.Branch(lastActiveBaseBranch))
+                }
+            }
+            // A Base Commit can only fall back to a Base Branch, never the other way round —
+            // see ADR 0003.
+            val fallbackTriggered = diffBaseBeforeRefresh is DiffBase.Commit && effectiveDiffBase is DiffBase.Branch
+
+            val revision = when (effectiveDiffBase) {
+                is DiffBase.Branch -> if (repo != null) service.getMergeBase(effectiveDiffBase.name) else null
+                is DiffBase.Commit -> effectiveDiffBase.sha
+            }
+            // getChangedFiles always includes Uncommitted Changes, even without a resolvable
+            // revision (see BranchDiffService.getChangedFiles).
+            val changes = service.getChangedFiles(effectiveDiffBase)
 
             ApplicationManager.getApplication().invokeLater {
-                val previousBranch = selectedBaseBranch
                 currentRemoteBranches = remote
                 currentLocalBranches = local
-                val allBranches = local + remote
-                val toSelect = allBranches.firstOrNull { it == previousBranch } ?: local.firstOrNull() ?: remote.firstOrNull()
-                if (toSelect != null) {
-                    selectedBaseBranch = toSelect
-                    branchButton.text = toSelect
-                }
+                currentCommits = commits
+                selectedDiffBase = effectiveDiffBase
+                if (effectiveDiffBase is DiffBase.Branch) lastActiveBaseBranch = effectiveDiffBase.name
+                updateDiffBaseButton(diffBaseButton, effectiveDiffBase)
                 currentRepo = repo
-                currentMergeBase = mergeBase
+                currentRevision = revision
                 rebuildTree(repo?.root?.path, changes)
                 val repoRoot = repo?.root?.path
                 val changedFilePaths = changes.mapNotNull { change ->
@@ -288,12 +424,23 @@ private class PreflightPanel(
                         ?: change.beforeRevision?.file?.path
                     if (repoRoot != null && path != null) path.removePrefix("$repoRoot/") else path
                 }.toSet()
-                outdatedPanel.refresh(
-                    commentStore.getStaleComments(changedFilePaths),
-                    commentStore.getAllBranchStaleComments(changedFilePaths)
-                )
+                val orphanedIds = project.service<CommentAnchorRegistry>().orphanedIds()
+                outdatedPanel.refresh(commentStore.getStaleComments(changedFilePaths, orphanedIds))
+                if (fallbackTriggered) notifyBaseCommitFallback(effectiveDiffBase)
             }
         }
+    }
+
+    private fun notifyBaseCommitFallback(fallback: DiffBase) {
+        val branchName = (fallback as? DiffBase.Branch)?.name ?: return
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup("Preflight")
+            .createNotification(
+                "Base Commit nicht mehr erreichbar",
+                "Zurückgesetzt auf Base Branch \"$branchName\".",
+                NotificationType.WARNING
+            )
+            .notify(project)
     }
 
     private fun rebuildTree(repoRoot: String?, changes: List<Change>) {
@@ -394,6 +541,25 @@ private class BranchTreeCellRenderer : ColoredTreeCellRenderer() {
     }
 }
 
+private class CommitTreeCellRenderer : ColoredTreeCellRenderer() {
+    override fun customizeCellRenderer(
+        tree: javax.swing.JTree, value: Any?, selected: Boolean,
+        expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
+    ) {
+        val node = value as? DefaultMutableTreeNode ?: return
+        when (val obj = node.userObject) {
+            is CommitLeaf -> {
+                append(
+                    formatDiffBaseLabel(DiffBase.Commit(obj.sha, obj.subject)),
+                    SimpleTextAttributes.REGULAR_ATTRIBUTES
+                )
+                append("  ${formatCommitTimestamp(obj.commitEpochSeconds)}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            }
+            is String -> append(obj, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        }
+    }
+}
+
 private class FileChangeTreeCellRenderer(
     private val commentStore: CommentStore,
     private val basePath: String
@@ -410,6 +576,12 @@ private class FileChangeTreeCellRenderer(
                 val fileType = FileTypeManager.getInstance().getFileTypeByFileName(name)
                 icon = fileType.icon
                 append(name, fileStatusAttributes(obj, filePath.path))
+                if (obj.type == Change.Type.MOVED) {
+                    val oldRelPath = obj.beforeRevision?.file?.path?.removePrefix("$basePath/")
+                    if (oldRelPath != null) {
+                        append("  ← $oldRelPath", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    }
+                }
                 if (!selected && filePath.path.contains("/test/")) {
                     background = JBColor(Color(0xC8E6C9), Color(0x2D4A2D))
                     isOpaque = true
@@ -440,6 +612,10 @@ private class FileChangeTreeCellRenderer(
             Change.Type.DELETED -> SimpleTextAttributes(
                 SimpleTextAttributes.STYLE_PLAIN,
                 JBColor(Color(0xC42B1C), Color(0xFF6B68))
+            )
+            Change.Type.MOVED -> SimpleTextAttributes(
+                SimpleTextAttributes.STYLE_PLAIN,
+                JBColor(Color(0x3B82C4), Color(0x6CA0DC))
             )
             else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
         }

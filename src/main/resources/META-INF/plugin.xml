@@ -23,8 +23,7 @@
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.CommentStore"/>
         <projectService
-            serviceImplementation="com.forcepushdev.preflight.services.ConfigStore"/>
-        <projectService
             serviceImplementation="com.forcepushdev.preflight.services.MainEditorCommentHandler"/>
+        <notificationGroup id="Preflight" displayType="BALLOON"/>
     </extensions>
 </idea-plugin>

@@ -11,6 +11,7 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import java.io.File
 import java.lang.reflect.Type
+import java.util.UUID
 
 @Service(Service.Level.PROJECT)
 class CommentStore(private val project: Project) {
@@ -21,67 +22,58 @@ class CommentStore(private val project: Project) {
     private val listType = object : TypeToken<List<PreflightComment>>() {}.type
     private val comments: MutableList<PreflightComment> = loadFromDisk().toMutableList()
 
-    internal var currentBranchOverride: String? = null
-    internal var branchFilterOverride: Boolean? = null
-
-    private fun currentBranch(): String =
-        currentBranchOverride ?: project.service<BranchDiffService>().getRepository()?.currentBranchName ?: ""
-
-    private fun isVisibleInCurrentBranch(comment: PreflightComment): Boolean {
-        if (!isBranchFilterEnabled()) return true
-        val branch = currentBranch()
-        return comment.branch == branch || comment.branch == ""
-    }
-
-    private fun isBranchFilterEnabled(): Boolean =
-        branchFilterOverride ?: project.service<ConfigStore>().load().branchFilter
-
     fun addComment(comment: PreflightComment) {
         reload()
-        comments.removeAll { it.file == comment.file && it.line == comment.line }
-        val branch = if (isBranchFilterEnabled()) comment.branch.ifEmpty { currentBranch() } else ""
-        comments.add(comment.copy(branch = branch))
+        comments.removeAll { it.id == comment.id }
+        comments.add(comment)
         saveToDisk()
     }
 
-    fun removeComment(file: String, line: Int) {
+    fun removeComment(id: String) {
         reload()
-        comments.removeAll { it.file == file && it.line == line }
+        comments.removeAll { it.id == id }
         saveToDisk()
     }
 
-    fun getComments(): List<PreflightComment> = comments.filter { isVisibleInCurrentBranch(it) }
+    fun removeAllComments() {
+        reload()
+        comments.clear()
+        saveToDisk()
+    }
+
+    fun getComments(): List<PreflightComment> = comments.toList()
+
+    fun getComment(id: String): PreflightComment? = comments.firstOrNull { it.id == id }
 
     fun getCommentsForFile(file: String): List<PreflightComment> =
-        comments.filter { it.file == file && isVisibleInCurrentBranch(it) }
+        comments.filter { it.file == file }
 
-    fun resolveComment(file: String, line: Int) = updateComment(file, line) { it.copy(resolved = true) }
+    fun resolveComment(id: String) = updateComment(id) { it.copy(resolved = true) }
 
-    fun reopenComment(file: String, line: Int) = updateComment(file, line) { it.copy(resolved = false) }
+    fun reopenComment(id: String) = updateComment(id) { it.copy(resolved = false) }
 
-    fun addReply(file: String, line: Int, text: String, author: String = "user") =
-        updateComment(file, line) { it.copy(replies = it.replies + Reply(text, author)) }
+    fun addReply(id: String, text: String, author: String = "user") =
+        updateComment(id) { it.copy(replies = it.replies + Reply(text, author)) }
 
-    fun editComment(file: String, line: Int, newText: String) =
-        updateComment(file, line) { it.copy(comment = newText) }
+    fun editComment(id: String, newText: String) =
+        updateComment(id) { it.copy(comment = newText) }
 
-    fun editReply(file: String, line: Int, replyIndex: Int, newText: String) =
-        updateComment(file, line) { it.copy(replies = it.replies.toMutableList().also { r -> r[replyIndex] = r[replyIndex].copy(text = newText) }) }
+    fun editReply(id: String, replyIndex: Int, newText: String) =
+        updateComment(id) { it.copy(replies = it.replies.toMutableList().also { r -> r[replyIndex] = r[replyIndex].copy(text = newText) }) }
 
-    fun getStaleComments(currentDiffFiles: Set<String>): List<PreflightComment> =
-        comments.filter { isVisibleInCurrentBranch(it) && it.file !in currentDiffFiles && !it.resolved }
+    fun updateLine(id: String, newLine: Int) = updateComment(id) { it.copy(line = newLine) }
 
-    fun getAllBranchStaleComments(currentDiffFiles: Set<String>): List<PreflightComment> =
-        comments.filter { it.file !in currentDiffFiles && !it.resolved }
+    fun getStaleComments(currentDiffFiles: Set<String>, orphanedIds: Set<String> = emptySet()): List<PreflightComment> =
+        comments.filter { (it.file !in currentDiffFiles || it.id in orphanedIds) && !it.resolved }
 
     fun reload() {
         comments.clear()
         comments.addAll(loadFromDisk())
     }
 
-    private fun updateComment(file: String, line: Int, update: (PreflightComment) -> PreflightComment) {
+    private fun updateComment(id: String, update: (PreflightComment) -> PreflightComment) {
         reload()
-        val idx = comments.indexOfFirst { it.file == file && it.line == line }
+        val idx = comments.indexOfFirst { it.id == id }
         if (idx >= 0) {
             comments[idx] = update(comments[idx])
             saveToDisk()
@@ -103,12 +95,15 @@ class CommentStore(private val project: Project) {
         return try {
             val raw: List<PreflightComment> = gson.fromJson(file.readText(), listType) ?: emptyList()
             @Suppress("SENSELESS_COMPARISON")
-            raw.map {
+            val migrated = raw.map {
                 it.copy(
                     replies = it.replies ?: emptyList(),
-                    author = it.author ?: "user"
+                    author = it.author ?: "user",
+                    id = it.id ?: UUID.randomUUID().toString()
                 )
             }
+            if (migrated != raw) file.writeText(gson.toJson(migrated))
+            migrated
         } catch (e: Exception) {
             emptyList()
         }

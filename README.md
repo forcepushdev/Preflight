@@ -83,24 +83,27 @@ Known issues:
 
 Currently there is no agent plugin, I use this prompt:
 ```
-you got a new review in .preflight/comments.json, the format is                                                                
-[                                         
-  {                                        
-    "file": "FILEPATH",                                             
-    "line": INT,                                
-    "comment": "REVIEWER COMMENT",              
-    "resolved": false,                         
-    "replies": [                                
-      "HERE IS A REPLY, you can put your reply here. Maybe there is a conversation already "                                     
-    ],                                          
-    "startLine": INT                            
-  }                                             
-]                                                                                                                                
+you got a new review in .preflight/comments.json, the format is
+[
+  {
+    "id": "STABLE UUID, this is the comment's identity - use it to refer to a comment, not file/line",
+    "file": "FILEPATH",
+    "line": INT,
+    "comment": "REVIEWER COMMENT",
+    "resolved": false,
+    "replies": [
+      "HERE IS A REPLY, you can put your reply here. Maybe there is a conversation already "
+    ],
+    "startLine": INT
+  }
+]
 startline is the line where the comment starts, endline where it ends.
-please solve the review commands, if you think the comment is wrong answer in the replies.                                       
-Replies is a list of replies {"text" :"THE TEXT", "author": "author"} use author AGENT.                                          
-When you solved the comments reply with "solved", do not set the resolved property.                                                                                
-if the line numbers need update because you changed files, update them. 
+line/startLine are a live snapshot kept in sync automatically while the file is edited - treat
+them as informational, not as the comment's identity. Always refer to a comment by its id.
+please solve the review commands, if you think the comment is wrong answer in the replies.
+Replies is a list of replies {"text" :"THE TEXT", "author": "author"} use author AGENT.
+When you solved the comments reply with "solved", do not set the resolved property.
+do not edit line or startLine yourself, they are updated automatically.
 ```
 
 ---

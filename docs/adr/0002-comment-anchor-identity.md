@@ -1,0 +1,7 @@
+# Comments get a stable ID; line numbers become a live-tracked anchor
+
+Comments were identified by `(file, line)` and rendered at a fixed `Int` line number, recomputed only on manual refresh. That was tolerable for commenting on a frozen HEAD diff, but Uncommitted Changes are edited live — a comment's line could drift on every keystroke above it, and two comments could never occupy the same line. We're moving to a stable `id` as the Comment's identity, with the line position tracked by a live-updating Comment Anchor (an IntelliJ RangeMarker) instead of a static integer, debounced ~1-2s back to `comments.json` on change.
+
+**Considered options**: keep static line numbers and only recompute on manual refresh, as before. Rejected — without live tracking, commenting on a file you're actively editing would desync within seconds, making the feature largely unusable for its main use case.
+
+**Consequences**: this breaks the existing `.preflight/comments.json` schema and the AI-agent prompt documented in the README (both currently key off `file`/`line`). Acceptable per the project's own alpha disclaimer ("Updates may and WILL break your comments"), but the README's agent instructions need updating alongside this change. If the exact anchored line is deleted outright, the Comment Anchor collapses to the deletion point and the comment is surfaced as an Outdated Comment rather than silently landing somewhere misleading.

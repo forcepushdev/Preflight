@@ -1,7 +1,9 @@
 package com.forcepushdev.preflight.toolWindow
 
+import com.forcepushdev.preflight.services.CommentAnchorRegistry
 import com.forcepushdev.preflight.services.CommentStore
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.editor.event.EditorMouseEvent
@@ -24,7 +26,8 @@ class CommentInlayManager(
     parentDisposable: Disposable
 ) : Disposable {
 
-    private val inlays = mutableMapOf<Int, Inlay<*>>()
+    private val anchorRegistry = editor.project?.service<CommentAnchorRegistry>()
+    private val inlays = mutableMapOf<String, Inlay<*>>()
     private val lineHighlighters = mutableListOf<RangeHighlighter>()
     private val ownDisposable = Disposer.newDisposable().also { Disposer.register(parentDisposable, it) }
     private var updatingInlays = false
@@ -66,6 +69,7 @@ class CommentInlayManager(
         inlays.clear()
         lineHighlighters.forEach { editor.markupModel.removeHighlighter(it) }
         lineHighlighters.clear()
+        store.getCommentsForFile(file).forEach { anchorRegistry?.unregister(editor.document, it.id) }
     }
 
     fun refresh() {
@@ -73,57 +77,59 @@ class CommentInlayManager(
         lineHighlighters.clear()
         inlays.values.forEach { it.dispose() }
         inlays.clear()
+        val lastLine = (editor.document.lineCount - 1).coerceAtLeast(0)
         store.getCommentsForFile(file).forEach { comment ->
-            if (comment.line >= editor.document.lineCount) return@forEach
-            val offset = editor.document.getLineEndOffset(comment.line)
-            val renderer = CommentInlayRenderer(comment, comment.line, this)
+            anchorRegistry?.register(editor.document, comment)
+            if (anchorRegistry?.isOrphaned(comment.id) == true) return@forEach
+
+            val liveLine = anchorRegistry?.currentLine(editor.document, comment.id)
+            val renderLine = (liveLine ?: comment.line).coerceIn(0, lastLine)
+            val offset = editor.document.getLineEndOffset(renderLine)
+            val renderer = CommentInlayRenderer(comment, renderLine, this)
             val inlay = editor.inlayModel.addBlockElement(
                 offset,
                 InlayProperties().showAbove(false),
                 renderer
             ) ?: return@forEach
-            inlays[comment.line] = inlay
+            inlays[comment.id] = inlay
+
             val attrs = TextAttributes(null, JBColor(Color(255, 243, 170), Color(90, 75, 15)), null, null, Font.PLAIN)
-            val hlStart = comment.startLine ?: comment.line
-            for (lineNum in hlStart..comment.line) {
+            val span = comment.line - (comment.startLine ?: comment.line)
+            val hlStart = (renderLine - span).coerceIn(0, renderLine)
+            for (lineNum in hlStart..renderLine) {
                 lineHighlighters += editor.markupModel.addLineHighlighter(lineNum, HighlighterLayer.SELECTION - 1, attrs)
             }
         }
     }
 
-    fun onReply(line: Int, text: String) {
-        store.addReply(file, line, text)
+    fun onReply(id: String, text: String) {
+        store.addReply(id, text)
         refresh()
     }
 
-    fun onEditComment(line: Int, newText: String) {
-        store.editComment(file, line, newText)
+    fun onEditComment(id: String, newText: String) {
+        store.editComment(id, newText)
         refresh()
     }
 
-    fun onEditReply(line: Int, replyIndex: Int, newText: String) {
-        store.editReply(file, line, replyIndex, newText)
+    fun onEditReply(id: String, replyIndex: Int, newText: String) {
+        store.editReply(id, replyIndex, newText)
         refresh()
     }
 
-    fun onResolve(line: Int) {
-        store.resolveComment(file, line)
+    fun onResolve(id: String) {
+        store.resolveComment(id)
         refresh()
     }
 
-    fun onReopen(line: Int) {
-        store.reopenComment(file, line)
+    fun onReopen(id: String) {
+        store.reopenComment(id)
         refresh()
     }
 
-    fun onDelete(line: Int) {
-        store.removeComment(file, line)
-        inlays.remove(line)?.dispose()
-        val hlStart = store.getCommentsForFile(file).firstOrNull { it.line == line }?.startLine ?: line
-        lineHighlighters.removeAll { hl ->
-            val hlLine = editor.document.getLineNumber(hl.startOffset)
-            if (hlLine in hlStart..line) { editor.markupModel.removeHighlighter(hl); true } else false
-        }
+    fun onDelete(id: String) {
+        store.removeComment(id)
+        anchorRegistry?.unregister(editor.document, id)
         refresh()
     }
 }

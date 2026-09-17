@@ -5,15 +5,16 @@ import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
-import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.RenderingHints
+import java.awt.datatransfer.StringSelection
 
 class CommentInlayRenderer(
     val comment: PreflightComment,
@@ -26,7 +27,9 @@ class CommentInlayRenderer(
     private var editCommentArea: Rectangle? = null
     private var resolveArea: Rectangle? = null
     private var deleteArea: Rectangle? = null
-    private val replyAreas = mutableListOf<Rectangle>()
+    private var copyArea: Rectangle? = null
+    private val replyEditAreas = mutableListOf<Rectangle>()
+    private val replyCopyAreas = mutableListOf<Rectangle>()
 
     override fun calcWidthInPixels(inlay: Inlay<*>): Int {
         val editorEx = inlay.editor as? EditorEx
@@ -43,7 +46,8 @@ class CommentInlayRenderer(
         val fm = editor.contentComponent.getFontMetrics(font)
         val maxWidth = maxOf(editor.scrollingModel.visibleArea.width - 2 * PADDING, 100)
         val commentLines = wrapLines(comment.comment, maxWidth) { fm.stringWidth(it) }.size
-        val replyLines = comment.replies.sumOf { wrapLines("  ↳ ${it.text}", maxWidth - 12) { fm.stringWidth(it) }.size + 1 }
+        // +2 per reply: one row for the author label, one for its own Edit/Copy action row.
+        val replyLines = comment.replies.sumOf { wrapLines("  ↳ ${it.text}", maxWidth - 12) { fm.stringWidth(it) }.size + 2 }
         return PADDING * 2 + (commentLines + replyLines + 1) * ROW_HEIGHT + ROW_HEIGHT
     }
 
@@ -77,7 +81,7 @@ class CommentInlayRenderer(
         val maxWidth = maxOf(r.width - 2 * PADDING, 100)
         var yOff = PADDING
 
-        val authorLabel = if (comment.author == "agent") "Agent" else "You"
+        val authorLabel = if (comment.author.equals("agent", ignoreCase = true)) "Agent" else "You"
         val smallFont = g.font.deriveFont(g.font.size - 1f)
         g.font = smallFont
         g.color = UIUtil.getContextHelpForeground()
@@ -91,10 +95,10 @@ class CommentInlayRenderer(
             yOff += ROW_HEIGHT
         }
 
-        replyAreas.clear()
+        replyEditAreas.clear()
+        replyCopyAreas.clear()
         for (reply in comment.replies) {
-            val replyStartY = yOff
-            val replyAuthorLabel = if (reply.author == "agent") "Agent" else "You"
+            val replyAuthorLabel = if (reply.author.equals("agent", ignoreCase = true)) "Agent" else "You"
             g.font = g.font.deriveFont(g.font.size - 1f)
             g.color = UIUtil.getContextHelpForeground()
             g.drawString(replyAuthorLabel, r.x + PADDING + 12, r.y + yOff + g.fontMetrics.ascent)
@@ -106,16 +110,29 @@ class CommentInlayRenderer(
                 g.drawString(wrappedLine, r.x + PADDING + 12, r.y + yOff + fm.ascent)
                 yOff += ROW_HEIGHT
             }
-            replyAreas.add(Rectangle(PADDING + 12, replyStartY, maxWidth - 12, yOff - replyStartY))
+
+            val editWidth = fm.stringWidth("Edit")
+            val copyWidth = fm.stringWidth("Copy")
+            val replyActionY = yOff + 2
+            val replyCopyRect = Rectangle(r.width - copyWidth - PADDING * 2, replyActionY, copyWidth + PADDING, ROW_HEIGHT - 4)
+            val replyEditRect = Rectangle(replyCopyRect.x - editWidth - PADDING * 2, replyActionY, editWidth + PADDING, ROW_HEIGHT - 4)
+            replyEditAreas.add(replyEditRect)
+            replyCopyAreas.add(replyCopyRect)
+            g.color = JBUI.CurrentTheme.Link.Foreground.ENABLED
+            g.drawString("Edit", r.x + replyEditRect.x + 2, r.y + replyEditRect.y + fm.ascent)
+            g.drawString("Copy", r.x + replyCopyRect.x + 2, r.y + replyCopyRect.y + fm.ascent)
+            yOff += ROW_HEIGHT
         }
 
         val resolveText = if (comment.resolved) "Reopen" else "Resolve"
         val resolveTextWidth = fm.stringWidth(resolveText)
         val deleteTextWidth = fm.stringWidth("Delete")
         val editTextWidth = fm.stringWidth("Edit")
-
+        val copyTextWidth = fm.stringWidth("Copy")
         val replyTextWidth = fm.stringWidth("Reply")
-        resolveArea = Rectangle(r.width - resolveTextWidth - PADDING * 2, yOff + 2, resolveTextWidth + PADDING, ROW_HEIGHT - 4)
+
+        copyArea = Rectangle(r.width - copyTextWidth - PADDING * 2, yOff + 2, copyTextWidth + PADDING, ROW_HEIGHT - 4)
+        resolveArea = Rectangle(copyArea!!.x - resolveTextWidth - PADDING * 2, yOff + 2, resolveTextWidth + PADDING, ROW_HEIGHT - 4)
         deleteArea = Rectangle(resolveArea!!.x - deleteTextWidth - PADDING * 2, yOff + 2, deleteTextWidth + PADDING, ROW_HEIGHT - 4)
         editCommentArea = Rectangle(deleteArea!!.x - editTextWidth - PADDING * 2, yOff + 2, editTextWidth + PADDING, ROW_HEIGHT - 4)
         replyArea = Rectangle(PADDING, yOff + 2, replyTextWidth + PADDING, ROW_HEIGHT - 4)
@@ -131,6 +148,7 @@ class CommentInlayRenderer(
 
         g.color = JBUI.CurrentTheme.Link.Foreground.ENABLED
         g.drawString(resolveText, r.x + resolveArea!!.x + 2, r.y + resolveArea!!.y + fm.ascent)
+        g.drawString("Copy", r.x + copyArea!!.x + 2, r.y + copyArea!!.y + fm.ascent)
     }
 
     fun handleClick(point: Point, inlay: Inlay<*>) {
@@ -153,23 +171,39 @@ class CommentInlayRenderer(
                 return
             }
         }
-        replyAreas.forEachIndexed { index, area ->
+        copyArea?.let {
+            if (it.contains(rel)) {
+                copyToClipboard(comment.comment)
+                return
+            }
+        }
+        replyEditAreas.forEachIndexed { index, area ->
             if (area.contains(rel)) {
                 showEditReplyPopup(inlay.editor as? EditorEx ?: return, point, index)
                 return
             }
         }
+        replyCopyAreas.forEachIndexed { index, area ->
+            if (area.contains(rel)) {
+                comment.replies.getOrNull(index)?.let { copyToClipboard(it.text) }
+                return
+            }
+        }
         deleteArea?.let {
             if (it.contains(rel)) {
-                manager.onDelete(line)
+                manager.onDelete(comment.id)
                 return
             }
         }
         resolveArea?.let {
             if (it.contains(rel)) {
-                if (comment.resolved) manager.onReopen(line) else manager.onResolve(line)
+                if (comment.resolved) manager.onReopen(comment.id) else manager.onResolve(comment.id)
             }
         }
+    }
+
+    private fun copyToClipboard(text: String) {
+        CopyPasteManager.getInstance().setContents(StringSelection(text))
     }
 
     private fun showReplyPopup(editor: EditorEx, point: Point) {
@@ -178,12 +212,12 @@ class CommentInlayRenderer(
             anchorPoint = point,
             title = "REPLY",
             saveLabel = "Reply ↵"
-        ) { text -> manager.onReply(line, text) }
+        ) { text -> manager.onReply(comment.id, text) }
     }
 
     private fun showEditCommentPopup(editor: EditorEx, point: Point) {
         CommentInputPopup.show(editor, line, initialText = comment.comment) { newText ->
-            manager.onEditComment(line, newText)
+            manager.onEditComment(comment.id, newText)
         }
     }
 
@@ -195,7 +229,7 @@ class CommentInlayRenderer(
             title = "EDIT REPLY",
             saveLabel = "Save ↵",
             initialText = existing
-        ) { text -> manager.onEditReply(line, replyIndex, text) }
+        ) { text -> manager.onEditReply(comment.id, replyIndex, text) }
     }
 
     companion object {

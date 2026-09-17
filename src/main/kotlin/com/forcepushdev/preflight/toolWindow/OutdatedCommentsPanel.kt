@@ -8,7 +8,6 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import javax.swing.BoxLayout
 import javax.swing.JButton
-import javax.swing.JCheckBox
 import javax.swing.JPanel
 
 class OutdatedCommentsPanel(
@@ -20,37 +19,21 @@ class OutdatedCommentsPanel(
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
     }
 
-    private var currentBranchStale: List<PreflightComment> = emptyList()
-    private var allBranchStale: List<PreflightComment> = emptyList()
-
-    private val showAllCheckbox = JCheckBox("Show all branches").apply {
-        isOpaque = false
-        addActionListener { rebuildList() }
-    }
-
     init {
         val headerRow = JPanel(BorderLayout()).apply {
             add(JBLabel("Outdated Comments").apply { border = JBUI.Borders.empty(4, 8) }, BorderLayout.WEST)
-            add(showAllCheckbox, BorderLayout.EAST)
         }
         add(headerRow, BorderLayout.NORTH)
         add(JBScrollPane(listPanel), BorderLayout.CENTER)
         isVisible = false
     }
 
-    fun refresh(currentBranchStale: List<PreflightComment>, allBranchStale: List<PreflightComment>) {
-        this.currentBranchStale = currentBranchStale
-        this.allBranchStale = allBranchStale
-        rebuildList()
-    }
-
-    private fun rebuildList() {
-        val toShow = if (showAllCheckbox.isSelected) allBranchStale else currentBranchStale
+    fun refresh(staleComments: List<PreflightComment>) {
         listPanel.removeAll()
-        toShow.forEach { comment -> listPanel.add(createRow(comment)) }
+        staleComments.forEach { comment -> listPanel.add(createRow(comment)) }
         listPanel.revalidate()
         listPanel.repaint()
-        isVisible = toShow.isNotEmpty()
+        isVisible = staleComments.isNotEmpty()
         revalidate()
         repaint()
     }
@@ -66,7 +49,7 @@ class OutdatedCommentsPanel(
             add(
                 JButton("Delete").apply {
                     addActionListener {
-                        store.removeComment(comment.file, comment.line)
+                        store.removeComment(comment.id)
                         onCommentClosed()
                     }
                 },

@@ -36,11 +36,41 @@ class CommentStoreTest : BasePlatformTestCase() {
     }
 
     fun testRemoveComment() {
-        store.addComment(PreflightComment("src/Foo.kt", 42, "Test"))
+        val comment = PreflightComment("src/Foo.kt", 42, "Test")
+        store.addComment(comment)
 
-        store.removeComment("src/Foo.kt", 42)
+        store.removeComment(comment.id)
 
         assertTrue(store.getComments().isEmpty())
+    }
+
+    fun testPreflightComment_hasUniqueIdByDefault() {
+        val a = PreflightComment("src/Foo.kt", 1, "A")
+        val b = PreflightComment("src/Foo.kt", 1, "B")
+
+        assertTrue(a.id.isNotBlank())
+        assertTrue(a.id != b.id)
+    }
+
+    fun testAddComment_allowsTwoCommentsOnSameLine() {
+        store.addComment(PreflightComment("src/Foo.kt", 5, "First"))
+        store.addComment(PreflightComment("src/Foo.kt", 5, "Second"))
+
+        assertEquals(2, store.getCommentsForFile("src/Foo.kt").size)
+    }
+
+    fun testLoadFromDisk_backfillsMissingId_stableAcrossReload() {
+        val json = """[{"file":"src/Foo.kt","line":1,"comment":"legacy"}]"""
+        project.basePath?.let { File("$it/.preflight").also { d -> d.mkdirs() } }
+        File("${project.basePath}/.preflight/comments.json").writeText(json)
+
+        val loaded = CommentStore(project)
+        val id = loaded.getComments()[0].id
+        assertTrue(id.isNotBlank())
+
+        loaded.reload()
+
+        assertEquals(id, loaded.getComments()[0].id)
     }
 
     fun testPersistsToJson_reloadedByNewInstance() {
@@ -106,32 +136,36 @@ class CommentStoreTest : BasePlatformTestCase() {
     }
 
     fun testResolveComment_setsResolvedTrue() {
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
+        val comment = PreflightComment("src/Foo.kt", 1, "text")
+        store.addComment(comment)
 
-        store.resolveComment("src/Foo.kt", 1)
+        store.resolveComment(comment.id)
 
         assertTrue(store.getComments()[0].resolved)
     }
 
     fun testReopenComment_setsResolvedFalse() {
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text", resolved = true))
+        val comment = PreflightComment("src/Foo.kt", 1, "text", resolved = true)
+        store.addComment(comment)
 
-        store.reopenComment("src/Foo.kt", 1)
+        store.reopenComment(comment.id)
 
         assertFalse(store.getComments()[0].resolved)
     }
 
     fun testAddReply_appendsToList() {
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
+        val comment = PreflightComment("src/Foo.kt", 1, "text")
+        store.addComment(comment)
 
-        store.addReply("src/Foo.kt", 1, "my reply")
+        store.addReply(comment.id, "my reply")
 
         assertEquals(listOf(Reply("my reply")), store.getComments()[0].replies)
     }
 
     fun testAddReply_persists() {
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
-        store.addReply("src/Foo.kt", 1, "my reply")
+        val comment = PreflightComment("src/Foo.kt", 1, "text")
+        store.addComment(comment)
+        store.addReply(comment.id, "my reply")
 
         val store2 = CommentStore(project)
 
@@ -139,9 +173,10 @@ class CommentStoreTest : BasePlatformTestCase() {
     }
 
     fun testAddReply_withAgentAuthor() {
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
+        val comment = PreflightComment("src/Foo.kt", 1, "text")
+        store.addComment(comment)
 
-        store.addReply("src/Foo.kt", 1, "agent reply", author = "agent")
+        store.addReply(comment.id, "agent reply", author = "agent")
 
         assertEquals(Reply("agent reply", "agent"), store.getComments()[0].replies[0])
     }
@@ -155,80 +190,12 @@ class CommentStoreTest : BasePlatformTestCase() {
         assertEquals(Reply("old reply", "user"), loaded.getComments()[0].replies[0])
     }
 
-    fun testAddComment_setsBranchFromCurrentBranch() {
-        store.branchFilterOverride = true
-        store.currentBranchOverride = "feature"
-
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
-
-        assertEquals("feature", store.getComments()[0].branch)
-    }
-
-    fun testGetComments_filtersToCurrentBranch() {
-        store.branchFilterOverride = true
-        store.currentBranchOverride = "feature"
-        store.addComment(PreflightComment("src/Foo.kt", 1, "on feature"))
-
-        store.currentBranchOverride = "main"
-
-        assertTrue(store.getComments().isEmpty())
-    }
-
-    fun testGetComments_includesLegacyEmptyBranch() {
-        store.branchFilterOverride = true
-        store.currentBranchOverride = ""
-        store.addComment(PreflightComment("src/Foo.kt", 1, "legacy"))
-
-        store.currentBranchOverride = "feature"
-
-        assertEquals(1, store.getComments().size)
-    }
-
-    fun testBranchFilter_disabledByDefault_allCommentsVisible() {
-        store.currentBranchOverride = "feature"
-        store.addComment(PreflightComment("src/Foo.kt", 1, "on feature"))
-        val store2 = CommentStore(project)
-        store2.currentBranchOverride = "main"
-
-        assertEquals(1, store2.getComments().size)
-    }
-
-    fun testBranchFilter_disabled_storesBranchAsEmpty() {
-        store.currentBranchOverride = "feature"
-
-        store.addComment(PreflightComment("src/Foo.kt", 1, "text"))
-
-        assertEquals("", store.getComments()[0].branch)
-    }
-
     fun testReload_readsFromDisk() {
         store.addComment(PreflightComment("src/Foo.kt", 1, "test"))
 
         store.reload()
 
         assertEquals(1, store.getComments().size)
-    }
-
-    fun testGetAllBranchStaleComments_returnsAllBranches() {
-        store.currentBranchOverride = "feature"
-        store.addComment(PreflightComment("src/Gone.kt", 1, "on feature"))
-        store.currentBranchOverride = "main"
-        store.addComment(PreflightComment("src/Gone.kt", 2, "on main"))
-
-        val all = store.getAllBranchStaleComments(emptySet())
-
-        assertEquals(2, all.size)
-    }
-
-    fun testGetAllBranchStaleComments_excludesResolved() {
-        store.currentBranchOverride = "feature"
-        store.addComment(PreflightComment("src/Gone.kt", 1, "resolved", resolved = true))
-        store.currentBranchOverride = "main"
-        store.addComment(PreflightComment("src/Gone.kt", 2, "open"))
-
-        val all = store.getAllBranchStaleComments(emptySet())
-
-        assertEquals(1, all.size)
     }
 
     fun testGetStaleComments_excludesResolved() {
@@ -239,5 +206,24 @@ class CommentStoreTest : BasePlatformTestCase() {
 
         assertEquals(1, stale.size)
         assertFalse(stale[0].resolved)
+    }
+
+    fun testGetStaleComments_orphanedAnchor_staleEvenWhenFileInDiff() {
+        val comment = PreflightComment("src/Foo.kt", 5, "Current")
+        store.addComment(comment)
+
+        val stale = store.getStaleComments(setOf("src/Foo.kt"), orphanedIds = setOf(comment.id))
+
+        assertEquals(1, stale.size)
+        assertEquals(comment.id, stale[0].id)
+    }
+
+    fun testGetStaleComments_orphanedAnchor_excludesResolved() {
+        val comment = PreflightComment("src/Foo.kt", 5, "Current", resolved = true)
+        store.addComment(comment)
+
+        val stale = store.getStaleComments(setOf("src/Foo.kt"), orphanedIds = setOf(comment.id))
+
+        assertTrue(stale.isEmpty())
     }
 }
