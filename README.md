@@ -60,15 +60,15 @@ Currently there is no agent plugin, I use this prompt:
 you got a new review in .preflight/comments.json, the format is
 [
   {
-    "id": "STABLE UUID, this is the comment's identity - use it to refer to a comment, not file/line",
     "file": "FILEPATH",
     "line": INT,
     "comment": "REVIEWER COMMENT",
     "resolved": false,
     "replies": [
-      "HERE IS A REPLY, you can put your reply here. Maybe there is a conversation already "
+	    {"author":"user", "text":"the comment"}
     ],
-    "startLine": INT
+    "startLine": INT,
+    "author": "AGENT" 
   }
 ]
 startline is the line where the comment starts, endline where it ends.
