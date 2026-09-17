@@ -23,8 +23,11 @@ class CommentAnchor(document: Document, startLine: Int, endLine: Int) {
             !marker.isValid || (hadContent && marker.startOffset == marker.endOffset)
         }
 
+    // currentLine tracks the END of the anchored range (comment.line), not the start: the
+    // inlay/gutter icon renders at the end line, and CommentInlayManager derives the highlight's
+    // start by subtracting the original span from this value (see CommentInlayManager.refresh).
     val currentLine: Int?
         get() = ReadAction.compute<Int?, RuntimeException> {
-            if (isOrphaned) null else marker.document.getLineNumber(marker.startOffset)
+            if (isOrphaned) null else marker.document.getLineNumber(marker.endOffset)
         }
 }

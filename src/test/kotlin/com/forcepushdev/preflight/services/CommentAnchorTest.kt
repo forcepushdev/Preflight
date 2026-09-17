@@ -71,4 +71,21 @@ class CommentAnchorTest : BasePlatformTestCase() {
         assertFalse(anchor.isOrphaned)
         assertEquals(1, anchor.currentLine)
     }
+
+    fun testCurrentLine_multiLineRange_reportsEndLine_notStartLine() {
+        val doc = document("a\nb\nc\nd\ne\n")
+
+        val anchor = CommentAnchor(doc, 1, 3) // spans lines 1-3, anchored at end line 3
+
+        assertEquals(3, anchor.currentLine)
+    }
+
+    fun testCurrentLine_multiLineRange_shiftsWithEndLine_whenTextInsertedAbove() {
+        val doc = document("a\nb\nc\nd\ne\n")
+        val anchor = CommentAnchor(doc, 1, 3) // spans lines 1-3
+
+        write { doc.insertString(0, "new line\n") }
+
+        assertEquals(4, anchor.currentLine)
+    }
 }
