@@ -15,5 +15,8 @@ data class PreflightComment(
     val replies: List<Reply> = emptyList(),
     val startLine: Int? = null,
     val author: String? = "user",
-    val id: String = UUID.randomUUID().toString()
+    val id: String = UUID.randomUUID().toString(),
+    // Text of the commented lines (startLine..line). Lets the comment be re-found by content when
+    // line numbers go stale, e.g. after edits made without IntelliJ.
+    val anchorText: String? = null
 )

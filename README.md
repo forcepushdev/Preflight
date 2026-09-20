@@ -53,31 +53,42 @@ This is alpha software. I use it every day but it has rough edges. Please report
 
 Known issues:
 
-- Line numbers shift when code changes after annotations are added (this can be solved by prompting your agent to update the comments.json file with the new line numbers, but this is not automatic yet)
+- Comments follow your edits live while the file is open in IntelliJ. If the file was changed without IntelliJ (e.g. by an agent, or while the IDE was closed), Preflight re-finds the comment via its `anchorText` when the file is opened. If you don't use IntelliJ at all, the agent has to keep `line`/`startLine` up to date itself (see the prompt below).
 
 Currently there is no agent plugin, I use this prompt:
 ```
 you got a new review in .preflight/comments.json, the format is
 [
   {
+    "id": "UUID",
     "file": "FILEPATH",
     "line": INT,
+    "startLine": INT,
+    "anchorText": "THE COMMENTED CODE",
     "comment": "REVIEWER COMMENT",
     "resolved": false,
     "replies": [
 	    {"author":"user", "text":"the comment"}
     ],
-    "startLine": INT,
     "author": "AGENT" 
   }
 ]
-startline is the line where the comment starts, endline where it ends.
-line/startLine are a live snapshot kept in sync automatically while the file is edited - treat
-them as informational, not as the comment's identity. Always refer to a comment by its id.
+line/startLine are 0-based line numbers of the last/first commented line (a single line comment has
+startLine == line). anchorText is the exact text of those lines. Always refer to a comment by its id.
 please solve the review commands, if you think the comment is wrong answer in the replies.
 Replies is a list of replies {"text" :"THE TEXT", "author": "author"} use author AGENT.
 When you solved the comments reply with "solved", do not set the resolved property.
-do not edit line or startLine yourself, they are updated automatically.
+
+line/startLine are kept in sync by the IDE while the file is open there, but they can be a bit off
+(unsaved editor changes, edits made while the file was closed). Before you rely on them, check that
+the lines at startLine..line still match anchorText. If they don't, search the file for anchorText
+and use that position; if it is gone, the reviewed code was probably changed, so use the comment
+text to find the right place.
+
+Whenever you insert or delete lines in a file that has comments (also when you are not solving them),
+move the comments of that file along: update line and startLine so that the lines at
+startLine..line are still the ones in anchorText. If the commented code itself changed, update
+anchorText to the new text of those lines. Never touch comments of other files.
 ```
 
 ---

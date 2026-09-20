@@ -3,15 +3,20 @@ package com.forcepushdev.preflight.services
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.RangeMarker
+import com.intellij.openapi.util.TextRange
 
 class CommentAnchor(document: Document, startLine: Int, endLine: Int) {
 
     private val hadContent =
         document.getLineEndOffset(endLine) > document.getLineStartOffset(startLine)
 
+    // surviveOnExternalChange: when a file is rewritten on disk (an agent editing it while
+    // IntelliJ is open) the document is reloaded as a whole; a plain marker would be invalidated,
+    // a persistent one is re-mapped through a diff of old and new text.
     private val marker: RangeMarker = document.createRangeMarker(
         document.getLineStartOffset(startLine),
-        document.getLineEndOffset(endLine)
+        document.getLineEndOffset(endLine),
+        true
     )
 
     // RangeMarker.getDocument()/getLineNumber() resolve through FileDocumentManager, which
@@ -30,4 +35,28 @@ class CommentAnchor(document: Document, startLine: Int, endLine: Int) {
         get() = ReadAction.compute<Int?, RuntimeException> {
             if (isOrphaned) null else marker.document.getLineNumber(marker.endOffset)
         }
+
+    val currentStartLine: Int?
+        get() = ReadAction.compute<Int?, RuntimeException> {
+            if (isOrphaned) null else marker.document.getLineNumber(marker.startOffset)
+        }
+
+    // Full text of the anchored lines, persisted as `anchorText` so the comment can be re-found by
+    // content if line numbers go stale (see AnchorRelocator).
+    val currentText: String?
+        get() = ReadAction.compute<String?, RuntimeException> {
+            if (isOrphaned) null
+            else marker.document.lineRangeText(
+                marker.document.getLineNumber(marker.startOffset),
+                marker.document.getLineNumber(marker.endOffset)
+            )
+        }
+}
+
+/** Text from the start of [startLine] to the end of [endLine], with both lines clamped into the document. */
+fun Document.lineRangeText(startLine: Int, endLine: Int): String {
+    val last = (lineCount - 1).coerceAtLeast(0)
+    val from = startLine.coerceIn(0, last)
+    val to = endLine.coerceIn(from, last)
+    return getText(TextRange(getLineStartOffset(from), getLineEndOffset(to)))
 }

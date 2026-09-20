@@ -9,15 +9,19 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.InlayProperties
+import com.intellij.openapi.editor.event.DocumentEvent
+import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
+import com.intellij.util.Alarm
 import java.awt.Color
 import java.awt.Font
 import java.awt.event.ComponentAdapter
@@ -29,7 +33,8 @@ class CommentInlayManager(
     private val store: CommentStore,
     private val file: String,
     parentDisposable: Disposable,
-    private val initiallyExpanded: (PreflightComment) -> Boolean = { !it.resolved }
+    private val initiallyExpanded: (PreflightComment) -> Boolean = { !it.resolved },
+    private val redrawDelayMs: Int = 250
 ) : Disposable {
 
     private val anchorRegistry = editor.project?.service<CommentAnchorRegistry>()
@@ -39,8 +44,18 @@ class CommentInlayManager(
     private val ownDisposable = Disposer.newDisposable().also { Disposer.register(parentDisposable, it) }
     private var updatingInlays = false
     private val expandedState = mutableMapOf<String, Boolean>()
+    private val redrawAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, ownDisposable)
 
     init {
+        // Highlight, inlay and gutter icon sit at offsets that shift with edits, but the line the
+        // comment *ends* on can change (Enter or a paste inside the block) — redraw once typing pauses.
+        editor.document.addDocumentListener(object : DocumentListener {
+            override fun documentChanged(event: DocumentEvent) {
+                redrawAlarm.cancelAllRequests()
+                redrawAlarm.addRequest({ refresh() }, redrawDelayMs)
+            }
+        }, ownDisposable)
+
         val resizeListener = object : ComponentAdapter() {
             override fun componentResized(e: ComponentEvent) {
                 if (updatingInlays) return
@@ -95,8 +110,9 @@ class CommentInlayManager(
             anchorRegistry?.register(editor.document, comment)
             if (anchorRegistry?.isOrphaned(comment.id) == true) return@forEach
 
-            val liveLine = anchorRegistry?.currentLine(editor.document, comment.id)
-            val renderLine = (liveLine ?: comment.line).coerceIn(0, lastLine)
+            val liveRange = anchorRegistry?.currentRange(editor.document, comment.id)
+            val renderLine = (liveRange?.last ?: comment.line).coerceIn(0, lastLine)
+            val startLine = (liveRange?.first ?: comment.startLine ?: comment.line).coerceIn(0, renderLine)
             val isExpanded = expandedState.getOrPut(comment.id) { initiallyExpanded(comment) }
             if (isExpanded) {
                 val offset = editor.document.getLineEndOffset(renderLine)
@@ -113,12 +129,16 @@ class CommentInlayManager(
             }
             gutterIconHighlighters += addToggleGutterIcon(comment, renderLine, isExpanded)
 
+            // One range highlighter instead of a line highlighter per line: it is a range marker,
+            // so lines typed or pasted inside the commented block are covered without a refresh.
             val attrs = TextAttributes(null, JBColor(Color(255, 243, 170), Color(90, 75, 15)), null, null, Font.PLAIN)
-            val span = comment.line - (comment.startLine ?: comment.line)
-            val hlStart = (renderLine - span).coerceIn(0, renderLine)
-            for (lineNum in hlStart..renderLine) {
-                lineHighlighters += editor.markupModel.addLineHighlighter(lineNum, HighlighterLayer.SELECTION - 1, attrs)
-            }
+            lineHighlighters += editor.markupModel.addRangeHighlighter(
+                editor.document.getLineStartOffset(startLine),
+                editor.document.getLineEndOffset(renderLine),
+                HighlighterLayer.SELECTION - 1,
+                attrs,
+                HighlighterTargetArea.LINES_IN_RANGE
+            )
         }
     }
 

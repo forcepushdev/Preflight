@@ -2,6 +2,7 @@ package com.forcepushdev.preflight.toolWindow
 
 import com.forcepushdev.preflight.services.CommentStore
 import com.forcepushdev.preflight.services.PreflightComment
+import com.forcepushdev.preflight.services.lineRangeText
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.AnAction
@@ -88,7 +89,12 @@ class CommentGutterHandler(
             override fun getClickAction() = object : AnAction() {
                 override fun actionPerformed(e: AnActionEvent) {
                     CommentInputPopup.show(editor, endLine) { text ->
-                        store.addComment(PreflightComment(currentFile, endLine, text, startLine = startLine))
+                        store.addComment(
+                            PreflightComment(
+                                currentFile, endLine, text, startLine = startLine,
+                                anchorText = editor.document.lineRangeText(startLine, endLine)
+                            )
+                        )
                         onCommentAdded()
                     }
                 }

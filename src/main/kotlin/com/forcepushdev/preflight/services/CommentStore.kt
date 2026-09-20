@@ -61,7 +61,8 @@ class CommentStore(private val project: Project) {
     fun editReply(id: String, replyIndex: Int, newText: String) =
         updateComment(id) { it.copy(replies = it.replies.toMutableList().also { r -> r[replyIndex] = r[replyIndex].copy(text = newText) }) }
 
-    fun updateLine(id: String, newLine: Int) = updateComment(id) { it.copy(line = newLine) }
+    fun updateAnchor(id: String, startLine: Int, line: Int, anchorText: String?) =
+        updateComment(id) { it.copy(startLine = startLine, line = line, anchorText = anchorText) }
 
     fun getStaleComments(currentDiffFiles: Set<String>, orphanedIds: Set<String> = emptySet()): List<PreflightComment> =
         comments.filter { (it.file !in currentDiffFiles || it.id in orphanedIds) && !it.resolved }
