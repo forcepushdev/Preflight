@@ -36,6 +36,9 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
     @Volatile
     private var reviewDiffPaths: Set<String> = emptySet()
 
+    // Comments opened outside the Preflight tool window's diff view start collapsed.
+    private val collapsedByDefault: (PreflightComment) -> Boolean = { false }
+
     init {
         EditorFactory.getInstance().addEditorFactoryListener(this, project)
         startCommentsFileWatcher()
@@ -134,7 +137,7 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
         if (store.getCommentsForFile(relativePath).isEmpty()) return
         val disposable = Disposer.newDisposable().also { Disposer.register(project, it) }
         editorDisposables[editor] = disposable
-        managers[editor] = CommentInlayManager(editor, store, relativePath, disposable)
+        managers[editor] = CommentInlayManager(editor, store, relativePath, disposable, collapsedByDefault)
     }
 
     override fun editorReleased(event: EditorFactoryEvent) {
@@ -143,6 +146,10 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
         editorDisposables.remove(editor)?.let { Disposer.dispose(it) }
         gutterHandlers.remove(editor)
         gutterDisposables.remove(editor)?.let { Disposer.dispose(it) }
+    }
+
+    fun collapseAllComments() {
+        managers.values.forEach { it.collapseAll() }
     }
 
     fun refreshAllInlays() {
@@ -174,7 +181,7 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
                 val path = vf.path.removePrefix("$basePath/")
                 val disposable = Disposer.newDisposable().also { Disposer.register(project, it) }
                 editorDisposables[editor] = disposable
-                managers[editor] = CommentInlayManager(editor, store, path, disposable)
+                managers[editor] = CommentInlayManager(editor, store, path, disposable, collapsedByDefault)
             }
     }
 
@@ -204,7 +211,7 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
             if (store.getCommentsForFile(file).isNotEmpty()) {
                 val disposable = Disposer.newDisposable().also { Disposer.register(project, it) }
                 editorDisposables[editor] = disposable
-                managers[editor] = CommentInlayManager(editor, store, file, disposable)
+                managers[editor] = CommentInlayManager(editor, store, file, disposable, collapsedByDefault)
             }
         }
     }

@@ -19,15 +19,16 @@ import java.awt.datatransfer.StringSelection
 class CommentInlayRenderer(
     val comment: PreflightComment,
     val line: Int,
-    private val manager: CommentInlayManager
+    private val manager: CommentInlayManager,
+    private val onCollapse: (String) -> Unit
 ) : EditorCustomElementRenderer {
 
-    var expanded: Boolean = !comment.resolved
     private var replyArea: Rectangle? = null
     private var editCommentArea: Rectangle? = null
     private var resolveArea: Rectangle? = null
     private var deleteArea: Rectangle? = null
     private var copyArea: Rectangle? = null
+    private var collapseArea: Rectangle? = null
     private val replyEditAreas = mutableListOf<Rectangle>()
     private val replyCopyAreas = mutableListOf<Rectangle>()
 
@@ -40,7 +41,6 @@ class CommentInlayRenderer(
     }
 
     override fun calcHeightInPixels(inlay: Inlay<*>): Int {
-        if (!expanded) return COLLAPSED_HEIGHT
         val editor = inlay.editor
         val font = UIUtil.getLabelFont()
         val fm = editor.contentComponent.getFontMetrics(font)
@@ -63,23 +63,18 @@ class CommentInlayRenderer(
         g2.drawLine(targetRegion.x, targetRegion.y, targetRegion.x + targetRegion.width, targetRegion.y)
         g2.drawLine(targetRegion.x, targetRegion.y + targetRegion.height - 1, targetRegion.x + targetRegion.width, targetRegion.y + targetRegion.height - 1)
         g2.font = UIUtil.getLabelFont()
-        if (!expanded) paintCollapsed(g2, targetRegion)
-        else paintExpanded(g2, targetRegion)
-    }
-
-    private fun paintCollapsed(g: Graphics2D, r: Rectangle) {
-        g.color = UIUtil.getContextHelpForeground()
-        val firstLine = comment.comment.lines().first().take(60)
-        val suffix = if (comment.replies.isNotEmpty())
-            " (${comment.replies.size} ${if (comment.replies.size == 1) "reply" else "replies"})"
-        else ""
-        g.drawString("✓ $firstLine$suffix", r.x + PADDING, r.y + COLLAPSED_HEIGHT / 2 + g.fontMetrics.ascent / 2)
+        paintExpanded(g2, targetRegion)
     }
 
     private fun paintExpanded(g: Graphics2D, r: Rectangle) {
         val fm = g.fontMetrics
         val maxWidth = maxOf(r.width - 2 * PADDING, 100)
         var yOff = PADDING
+
+        val collapseIconWidth = fm.stringWidth(COLLAPSE_ICON)
+        collapseArea = Rectangle(r.width - collapseIconWidth - PADDING * 2, 2, collapseIconWidth + PADDING, ROW_HEIGHT - 4)
+        g.color = UIUtil.getContextHelpForeground()
+        g.drawString(COLLAPSE_ICON, r.x + collapseArea!!.x + PADDING / 2, r.y + collapseArea!!.y + fm.ascent)
 
         val authorLabel = if (comment.author.equals("agent", ignoreCase = true)) "Agent" else "You"
         val smallFont = g.font.deriveFont(g.font.size - 1f)
@@ -152,13 +147,14 @@ class CommentInlayRenderer(
     }
 
     fun handleClick(point: Point, inlay: Inlay<*>) {
-        if (!expanded) {
-            expanded = true
-            inlay.update()
-            return
-        }
         val bounds = inlay.bounds ?: return
         val rel = Point(point.x - bounds.x, point.y - bounds.y)
+        collapseArea?.let {
+            if (it.contains(rel)) {
+                onCollapse(comment.id)
+                return
+            }
+        }
         replyArea?.let {
             if (it.contains(rel)) {
                 showReplyPopup(inlay.editor as? EditorEx ?: return@let, point)
@@ -233,10 +229,10 @@ class CommentInlayRenderer(
     }
 
     companion object {
-        private const val COLLAPSED_HEIGHT = 24
         private const val ROW_HEIGHT = 22
         private const val PADDING = 8
         private const val ACCENT_BAR_WIDTH = 3
+        private const val COLLAPSE_ICON = "▼"
 
         internal fun wrapLines(text: String, maxWidth: Int, measure: (String) -> Int): List<String> {
             if (maxWidth <= 0 || measure(text) <= maxWidth) return listOf(text)

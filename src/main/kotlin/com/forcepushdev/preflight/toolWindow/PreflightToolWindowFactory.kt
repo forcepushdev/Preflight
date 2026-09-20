@@ -281,6 +281,9 @@ private class PreflightPanel(
                 object : AnAction("Refresh", "Reload changed files and comments", AllIcons.Actions.Refresh) {
                     override fun actionPerformed(e: AnActionEvent) = reloadComments()
                 },
+                object : AnAction("Collapse All Comments", "Collapse all comment threads in the editor", AllIcons.Actions.Collapseall) {
+                    override fun actionPerformed(e: AnActionEvent) = collapseAllComments()
+                },
                 object : AnAction("Delete All Comments", "Delete all Preflight comments", AllIcons.Actions.GC) {
                     override fun actionPerformed(e: AnActionEvent) = deleteAllComments()
                     override fun update(e: AnActionEvent) {
@@ -363,6 +366,11 @@ private class PreflightPanel(
         project.service<MainEditorCommentHandler>().refreshAllInlays()
         currentInlayManager?.refresh()
         refresh()
+    }
+
+    private fun collapseAllComments() {
+        currentInlayManager?.collapseAll()
+        project.service<MainEditorCommentHandler>().collapseAllComments()
     }
 
     private fun deleteAllComments() {
