@@ -1,6 +1,7 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 
 plugins {
     id("java") // Java support
@@ -17,6 +18,12 @@ version = providers.gradleProperty("pluginVersion").get()
 // Set the JVM language level used to build the project.
 kotlin {
     jvmToolchain(21)
+
+    compilerOptions {
+        // Without this Kotlin generates overrides for the default methods of Java interfaces such as
+        // ToolWindowFactory, which the Plugin Verifier then reports as (deprecated/experimental) API usage.
+        jvmDefault = JvmDefaultMode.NO_COMPATIBILITY
+    }
 }
 
 // Configure project's dependencies

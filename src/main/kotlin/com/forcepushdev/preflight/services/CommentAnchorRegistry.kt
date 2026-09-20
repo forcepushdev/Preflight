@@ -1,7 +1,6 @@
 package com.forcepushdev.preflight.services
 
 import com.intellij.openapi.Disposable
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Document
@@ -68,7 +67,7 @@ class CommentAnchorRegistry @JvmOverloads constructor(
         if (startLine != storedStart || endLine != storedEnd || comment.anchorText == null) scheduleFlush()
     }
 
-    private fun documentLines(document: Document): List<String> = ReadAction.compute<List<String>, RuntimeException> {
+    private fun documentLines(document: Document): List<String> = readAccess {
         (0 until document.lineCount).map {
             document.getText(TextRange(document.getLineStartOffset(it), document.getLineEndOffset(it)))
         }

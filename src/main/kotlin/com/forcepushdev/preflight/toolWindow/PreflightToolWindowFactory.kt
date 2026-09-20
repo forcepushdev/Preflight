@@ -325,7 +325,7 @@ private class PreflightPanel(
             val baseText = baseRelativePath?.let { service.getFileContentAtRevision(it, revision) } ?: ""
 
             ApplicationManager.getApplication().invokeLater {
-                if (Disposer.isDisposed(diffProcessor)) {
+                if (diffProcessor.isDisposed) {
                     diffProcessor = PreflightDiffProcessor().also { Disposer.register(disposable, it) }
                 }
                 val fileType = change.virtualFile?.fileType
