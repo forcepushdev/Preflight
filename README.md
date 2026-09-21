@@ -1,8 +1,10 @@
 # Preflight (Local Code Review, IntelliJ Plugin)
 
 > **Alpha**
-Available at Jetbrains [Marketplace](https://plugins.jetbrains.com/plugin/34322-preflight/)
 ---
+
+## Now Available at Jetbrains [Marketplace](https://plugins.jetbrains.com/plugin/34322-preflight/)
+
 
 ## The Problem
 
