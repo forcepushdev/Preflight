@@ -26,6 +26,8 @@
             serviceImplementation="com.forcepushdev.preflight.services.MainEditorCommentHandler"/>
         <projectService
             serviceImplementation="com.forcepushdev.preflight.toolWindow.ReviewNavigationService"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.ReviewedStore"/>
         <notificationGroup id="Preflight" displayType="BALLOON"/>
     </extensions>
 
@@ -54,6 +56,13 @@
                     text="Preflight: Previous Comment"
                     description="Jump to the previous open review comment, continuing in the previous file">
                 <keyboard-shortcut keymap="$default" first-keystroke="control alt shift LEFT"/>
+            </action>
+            <action id="Preflight.ToggleReviewed"
+                    class="com.forcepushdev.preflight.toolWindow.ToggleReviewedAction"
+                    text="Preflight: Toggle Reviewed"
+                    description="Mark the file shown in the Preflight diff as reviewed, or clear the mark"
+                    icon="AllIcons.Actions.Checked">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt shift R"/>
             </action>
         </group>
     </actions>

@@ -6,6 +6,7 @@ import com.forcepushdev.preflight.services.CommentStore
 import com.forcepushdev.preflight.services.CommitInfo
 import com.forcepushdev.preflight.services.DiffBase
 import com.forcepushdev.preflight.services.MainEditorCommentHandler
+import com.forcepushdev.preflight.services.ReviewedStore
 import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.impl.DiffRequestProcessor
 import com.intellij.diff.requests.DiffRequest
@@ -35,6 +36,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.vcs.changes.Change
+import com.intellij.openapi.vcs.changes.ChangeListAdapter
+import com.intellij.openapi.vcs.changes.ChangeListManager
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.PopupHandler
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.ColoredTreeCellRenderer
@@ -86,7 +92,7 @@ private class PreflightPanel(
     private val project: Project,
     private val service: BranchDiffService,
     private val disposable: Disposable
-) : JPanel(BorderLayout()), ReviewNavigable {
+) : JPanel(BorderLayout()), ReviewController {
 
     private val treeRoot = DefaultMutableTreeNode("root")
     private val treeModel = DefaultTreeModel(treeRoot)
@@ -101,7 +107,10 @@ private class PreflightPanel(
     }.apply {
         isRootVisible = false
         selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
-        cellRenderer = FileChangeTreeCellRenderer(project.service<CommentStore>(), project.basePath ?: "") { it == currentFile }
+        cellRenderer = FileChangeTreeCellRenderer(project.service<CommentStore>(), project.basePath ?: "",
+            isShownInDiff = { it == currentFile },
+            isReviewed = { it in reviewedFiles }
+        )
     }
     private var selectedDiffBase: DiffBase = DiffBase.Branch(service.getMainBranch())
     private var lastActiveBaseBranch: String = service.getMainBranch()
@@ -115,6 +124,12 @@ private class PreflightPanel(
     private val gutterHandler = CommentGutterHandler(commentStore) { onCommentAdded() }
     private val outdatedPanel = OutdatedCommentsPanel(commentStore) { refresh() }
     private var currentFile: String? = null
+    private val reviewedStore = project.service<ReviewedStore>()
+    // Files of the Review Diff whose review mark is still valid; recomputed off the EDT since it hashes file contents.
+    @Volatile
+    private var reviewedFiles: Set<String> = emptySet()
+    @Volatile
+    private var changedFiles: Set<String> = emptySet()
     // Set while the tree selection is changed programmatically, so it doesn't reopen the diff.
     private var restoringSelection = false
     // Where the diff opened by the next tree selection should scroll to; set by navigate().
@@ -287,6 +302,7 @@ private class PreflightPanel(
         val toolbar = ActionManager.getInstance().createActionToolbar(
             "Preflight",
             DefaultActionGroup(
+                ActionManager.getInstance().getAction("Preflight.ToggleReviewed"),
                 object : AnAction("Refresh", "Reload changed files and comments", AllIcons.Actions.Refresh) {
                     override fun actionPerformed(e: AnActionEvent) = reloadComments()
                 },
@@ -319,6 +335,12 @@ private class PreflightPanel(
             pendingScrollTarget = null
             openDiff(change, scrollTarget)
         }
+
+        PopupHandler.installPopupMenu(fileTree, DefaultActionGroup(ActionManager.getInstance().getAction("Preflight.ToggleReviewed")), "PreflightFileTree")
+        // Edits (once saved) can void a review mark; the change list update follows each save.
+        ChangeListManager.getInstance(project).addChangeListListener(object : ChangeListAdapter() {
+            override fun changeListUpdateDone() = recomputeReviewed()
+        }, disposable)
 
         DumbService.getInstance(project).runWhenSmart { refresh() }
     }
@@ -432,6 +454,30 @@ private class PreflightPanel(
             }
     }
 
+    override fun toggleReviewed() {
+        val file = currentFile ?: return
+        // The mark hashes the file on disk, so unsaved edits have to be on disk first.
+        project.basePath?.let { LocalFileSystem.getInstance().findFileByPath("$it/$file") }
+            ?.let { vf -> FileDocumentManager.getInstance().getCachedDocument(vf) }
+            ?.let { FileDocumentManager.getInstance().saveDocument(it) }
+        val commit = currentRepo?.currentRevision
+        val wasReviewed = file in reviewedFiles
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (wasReviewed) reviewedStore.unmark(file) else reviewedStore.markReviewed(file, commit)
+            recomputeReviewed()
+        }
+    }
+
+    private fun recomputeReviewed() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val reviewed = reviewedStore.reviewedAmong(changedFiles)
+            ApplicationManager.getApplication().invokeLater {
+                reviewedFiles = reviewed
+                fileTree.repaint()
+            }
+        }
+    }
+
     private fun currentDiffViewer(): SimpleDiffViewer? =
         if (diffProcessor.isDisposed) null else diffProcessor.activeViewer as? SimpleDiffViewer
 
@@ -518,6 +564,8 @@ private class PreflightPanel(
                         ?: change.beforeRevision?.file?.path
                     if (repoRoot != null && path != null) path.removePrefix("$repoRoot/") else path
                 }.toSet()
+                changedFiles = changedFilePaths
+                recomputeReviewed()
                 val orphanedIds = project.service<CommentAnchorRegistry>().orphanedIds()
                 outdatedPanel.refresh(commentStore.getStaleComments(changedFilePaths, orphanedIds))
                 project.service<ReviewNavigationService>().register(this, disposable)
@@ -675,7 +723,8 @@ private class CommitTreeCellRenderer : ColoredTreeCellRenderer() {
 private class FileChangeTreeCellRenderer(
     private val commentStore: CommentStore,
     private val basePath: String,
-    private val isShownInDiff: (String) -> Boolean
+    private val isShownInDiff: (String) -> Boolean,
+    private val isReviewed: (String) -> Boolean
 ) : ColoredTreeCellRenderer() {
     override fun customizeCellRenderer(
         tree: javax.swing.JTree, value: Any?, selected: Boolean,
@@ -690,7 +739,9 @@ private class FileChangeTreeCellRenderer(
                 icon = fileType.icon
                 val relPath = filePath.path.removePrefix("$basePath/")
                 val current = isShownInDiff(relPath)
-                val status = fileStatusAttributes(obj, filePath.path)
+                val reviewed = isReviewed(relPath)
+                if (reviewed) append("✓ ", SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, REVIEWED_COLOR))
+                val status = if (reviewed) SimpleTextAttributes.GRAYED_ATTRIBUTES else fileStatusAttributes(obj, filePath.path)
                 append(name, if (current) status.derive(SimpleTextAttributes.STYLE_BOLD, null, null, null) else status)
                 if (obj.type == Change.Type.MOVED) {
                     val oldRelPath = obj.beforeRevision?.file?.path?.removePrefix("$basePath/")
@@ -717,9 +768,21 @@ private class FileChangeTreeCellRenderer(
                 append(obj, SimpleTextAttributes.REGULAR_ATTRIBUTES)
                 val count = leafCount(node)
                 append("  $count ${if (count == 1) "file" else "files"}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                val reviewedCount = reviewedLeafCount(node)
+                if (reviewedCount > 0) {
+                    append("  ✓ $reviewedCount/$count", SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, REVIEWED_COLOR))
+                }
             }
         }
     }
+
+    private fun reviewedLeafCount(node: DefaultMutableTreeNode): Int =
+        node.depthFirstEnumeration().asSequence()
+            .mapNotNull { ((it as? DefaultMutableTreeNode)?.userObject as? Change) }
+            .count { change ->
+                val path = (change.afterRevision?.file ?: change.beforeRevision?.file)?.path ?: return@count false
+                isReviewed(path.removePrefix("$basePath/"))
+            }
 
     private fun fileStatusAttributes(change: Change, path: String): SimpleTextAttributes =
         when (change.type) {
@@ -738,3 +801,5 @@ private class FileChangeTreeCellRenderer(
             else -> SimpleTextAttributes.REGULAR_ATTRIBUTES
         }
 }
+
+private val REVIEWED_COLOR = JBColor(Color(0x2E7D32), Color(0x81C784))
