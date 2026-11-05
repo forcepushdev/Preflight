@@ -11,12 +11,8 @@ object CommentMarkdown {
 
     fun render(comments: List<PreflightComment>): String {
         if (comments.isEmpty()) return "# Review Comments\n\n_No open comments._\n"
-        val out = StringBuilder("# Review Comments\n")
-        comments.groupBy { it.file }.toSortedMap().forEach { (file, fileComments) ->
-            out.append("\n## `").append(file).append("`\n")
-            fileComments.sortedBy { it.startLine ?: it.line }.forEach { out.append('\n').append(renderComment(it)) }
-        }
-        return out.toString()
+        val ordered = comments.sortedWith(compareBy({ it.file }, { it.startLine ?: it.line }))
+        return "# Review Comments\n\n" + ordered.joinToString("") { renderComment(it) + "\n---\n\n" }.trimEnd() + "\n"
     }
 
     private fun renderComment(comment: PreflightComment): String {
@@ -24,18 +20,18 @@ object CommentMarkdown {
         // Stored lines are 0-based; editors and PR tools count from 1.
         val start = (comment.startLine ?: comment.line) + 1
         val end = comment.line + 1
-        val lines = if (start == end) "Line $start" else "Lines $start–$end"
+        val location = if (start == end) "${comment.file}:$start" else "${comment.file}:$start-$end"
         val status = if (comment.resolved) " (resolved)" else ""
-        out.append("### ").append(lines).append(status).append('\n')
+        out.append("`").append(location).append('`').append(status).append('\n')
         comment.anchorText?.takeIf { it.isNotBlank() }?.let { code ->
             val fence = fenceFor(code)
             out.append('\n').append(fence).append(languageOf(comment.file)).append('\n')
                 .append(code.trimEnd('\n')).append('\n').append(fence).append('\n')
         }
-        out.append("\n**").append(authorLabel(comment.author)).append(":** ").append(comment.comment.trim()).append('\n')
+        out.append("\n**").append(authorLabel(comment.author)).append("**\n").append(comment.comment.trim()).append('\n')
         comment.replies.forEach { reply ->
-            out.append("\n> **").append(authorLabel(reply.author)).append(":** ")
-                .append(reply.text.trim().replace("\n", "\n> ")).append('\n')
+            out.append("\n> **").append(authorLabel(reply.author)).append("**\n")
+            reply.text.trim().lines().forEach { line -> out.append(if (line.isEmpty()) ">" else "> $line").append('\n') }
         }
         return out.toString()
     }

@@ -24,6 +24,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.ScrollType
@@ -358,7 +359,7 @@ private class PreflightPanel(
 
     init {
         val toolbar = ActionManager.getInstance().createActionToolbar(
-            "Preflight",
+            PREFLIGHT_TOOLBAR_PLACE,
             DefaultActionGroup(
                 ActionManager.getInstance().getAction("Preflight.ToggleReviewed"),
                 ActionManager.getInstance().getAction("Preflight.OpenCommentsMarkdown"),
@@ -533,10 +534,13 @@ private class PreflightPanel(
     }
 
     private fun toggleReviewed(file: String) {
-        // The mark hashes the file on disk, so unsaved edits have to be on disk first.
+        // The mark hashes the file on disk, so unsaved edits have to be on disk first. Saving needs
+        // the write-intent lock, which a raw Swing mouse event (the tree checkbox) doesn't hold.
+        val documentManager = FileDocumentManager.getInstance()
         project.basePath?.let { LocalFileSystem.getInstance().findFileByPath("$it/$file") }
-            ?.let { vf -> FileDocumentManager.getInstance().getCachedDocument(vf) }
-            ?.let { FileDocumentManager.getInstance().saveDocument(it) }
+            ?.let { vf -> documentManager.getCachedDocument(vf) }
+            ?.takeIf { documentManager.isDocumentUnsaved(it) }
+            ?.let { document -> WriteIntentReadAction.run { documentManager.saveDocument(document) } }
         val commit = currentRepo?.currentRevision
         val wasReviewed = file in reviewedFiles
         // Show the new state right away; recomputeReviewed() confirms it from disk.

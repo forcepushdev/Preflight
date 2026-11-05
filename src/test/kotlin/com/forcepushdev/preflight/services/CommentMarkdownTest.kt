@@ -12,10 +12,10 @@ class CommentMarkdownTest : TestCase() {
             )
         )
 
-        assertTrue(md.indexOf("## `src/A.kt`") < md.indexOf("## `src/B.kt`"))
-        assertTrue(md.contains("### Line 42\n"))
-        assertTrue(md.contains("### Lines 8–10\n"))
-        assertTrue(md.contains("**User:** Too long"))
+        assertTrue(md.indexOf("src/A.kt") < md.indexOf("src/B.kt"))
+        assertTrue(md.contains("`src/A.kt:42`\n"))
+        assertTrue(md.contains("`src/B.kt:8-10`\n"))
+        assertTrue(md.contains("**User**\nToo long\n"))
     }
 
     fun testRender_includesCodeSnippetAndReplies() {
@@ -31,7 +31,7 @@ class CommentMarkdownTest : TestCase() {
         )
 
         assertTrue(md.contains("```kotlin\nval x: Int?\nval y = x!!\n```"))
-        assertTrue(md.contains("> **Agent:** Fixed.\n> Now non-null."))
+        assertTrue(md.contains("> **Agent**\n> Fixed.\n> Now non-null.\n"))
     }
 
     fun testRender_snippetWithBackticks_usesLongerFence() {
@@ -43,7 +43,50 @@ class CommentMarkdownTest : TestCase() {
     fun testRender_marksResolved() {
         val md = CommentMarkdown.render(listOf(PreflightComment("a.kt", 0, "c", resolved = true, id = "1")))
 
-        assertTrue(md.contains("### Line 1 (resolved)"))
+        assertTrue(md.contains("`a.kt:1` (resolved)"))
+    }
+
+    fun testRender_separatesCommentsWithRule() {
+        val md = CommentMarkdown.render(
+            listOf(PreflightComment("a.kt", 0, "first", id = "1"), PreflightComment("a.kt", 5, "second", id = "2"))
+        )
+
+        assertEquals(2, Regex("(?m)^---$").findAll(md).count())
+        assertTrue(md.indexOf("first") < md.indexOf("---") && md.indexOf("---") < md.indexOf("second"))
+        assertTrue(md.endsWith("---\n"))
+    }
+
+    fun testRender_matchesAgreedLayout() {
+        val md = CommentMarkdown.render(
+            listOf(
+                PreflightComment(
+                    "Roles.kt", 98, "🟡 Rename it.\n\nVorschlag: `X_EXT`.", startLine = 98,
+                    anchorText = "const val X = \"X\"", author = "agent",
+                    replies = listOf(Reply("Umgesetzt.", "user")), id = "1"
+                )
+            )
+        )
+
+        val expected = """
+            |# Review Comments
+            |
+            |`Roles.kt:99`
+            |
+            |```kotlin
+            |const val X = "X"
+            |```
+            |
+            |**Agent**
+            |🟡 Rename it.
+            |
+            |Vorschlag: `X_EXT`.
+            |
+            |> **User**
+            |> Umgesetzt.
+            |
+            |---
+            |""".trimMargin()
+        assertEquals(expected, md)
     }
 
     fun testRender_empty() {
