@@ -101,7 +101,7 @@ private class PreflightPanel(
     }.apply {
         isRootVisible = false
         selectionModel.selectionMode = TreeSelectionModel.SINGLE_TREE_SELECTION
-        cellRenderer = FileChangeTreeCellRenderer(project.service<CommentStore>(), project.basePath ?: "")
+        cellRenderer = FileChangeTreeCellRenderer(project.service<CommentStore>(), project.basePath ?: "") { it == currentFile }
     }
     private var selectedDiffBase: DiffBase = DiffBase.Branch(service.getMainBranch())
     private var lastActiveBaseBranch: String = service.getMainBranch()
@@ -115,6 +115,8 @@ private class PreflightPanel(
     private val gutterHandler = CommentGutterHandler(commentStore) { onCommentAdded() }
     private val outdatedPanel = OutdatedCommentsPanel(commentStore) { refresh() }
     private var currentFile: String? = null
+    // Set while the tree selection is changed programmatically, so it doesn't reopen the diff.
+    private var restoringSelection = false
     // Where the diff opened by the next tree selection should scroll to; set by navigate().
     private var pendingScrollTarget: NavTarget? = null
     private var currentInlayManager: CommentInlayManager? = null
@@ -310,6 +312,7 @@ private class PreflightPanel(
         add(leftPanel, BorderLayout.CENTER)
 
         fileTree.addTreeSelectionListener {
+            if (restoringSelection) return@addTreeSelectionListener
             val node = fileTree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return@addTreeSelectionListener
             val change = node.userObject as? Change ?: return@addTreeSelectionListener
             val scrollTarget = pendingScrollTarget
@@ -362,6 +365,7 @@ private class PreflightPanel(
                     }
                 }
                 currentFile = relativePath
+                fileTree.repaint()
                 DiffEditorTabFilesManager.getInstance(project).showDiffFile(diffFile, true)
             }
         }
@@ -507,6 +511,7 @@ private class PreflightPanel(
                 currentRepo = repo
                 currentRevision = revision
                 rebuildTree(repo?.root?.path, changes)
+                selectCurrentFileInTree()
                 val repoRoot = repo?.root?.path
                 val changedFilePaths = changes.mapNotNull { change ->
                     val path = change.afterRevision?.file?.path
@@ -558,6 +563,19 @@ private class PreflightPanel(
 
         treeModel.reload()
         expandAll()
+    }
+
+    /** treeModel.reload() drops the selection; put it back on the file shown in the diff. */
+    private fun selectCurrentFileInTree() {
+        val node = changeLeaves().firstOrNull { it.first == currentFile }?.second ?: return
+        val path = TreePath(node.path)
+        restoringSelection = true
+        try {
+            fileTree.selectionPath = path
+        } finally {
+            restoringSelection = false
+        }
+        fileTree.scrollPathToVisible(path)
     }
 
     private fun compactSingleChildDirs(node: DefaultMutableTreeNode) {
@@ -656,7 +674,8 @@ private class CommitTreeCellRenderer : ColoredTreeCellRenderer() {
 
 private class FileChangeTreeCellRenderer(
     private val commentStore: CommentStore,
-    private val basePath: String
+    private val basePath: String,
+    private val isShownInDiff: (String) -> Boolean
 ) : ColoredTreeCellRenderer() {
     override fun customizeCellRenderer(
         tree: javax.swing.JTree, value: Any?, selected: Boolean,
@@ -669,7 +688,10 @@ private class FileChangeTreeCellRenderer(
                 val name = filePath?.name ?: return
                 val fileType = FileTypeManager.getInstance().getFileTypeByFileName(name)
                 icon = fileType.icon
-                append(name, fileStatusAttributes(obj, filePath.path))
+                val relPath = filePath.path.removePrefix("$basePath/")
+                val current = isShownInDiff(relPath)
+                val status = fileStatusAttributes(obj, filePath.path)
+                append(name, if (current) status.derive(SimpleTextAttributes.STYLE_BOLD, null, null, null) else status)
                 if (obj.type == Change.Type.MOVED) {
                     val oldRelPath = obj.beforeRevision?.file?.path?.removePrefix("$basePath/")
                     if (oldRelPath != null) {
@@ -682,10 +704,12 @@ private class FileChangeTreeCellRenderer(
                 } else {
                     isOpaque = false
                 }
-                val relPath = filePath.path.removePrefix("$basePath/")
                 val unresolved = commentStore.getCommentsForFile(relPath).count { !it.resolved }
                 if (unresolved > 0) {
                     append("  ● $unresolved", SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, JBColor.ORANGE))
+                }
+                if (current) {
+                    append("  ◀", SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, JBUI.CurrentTheme.Link.Foreground.ENABLED))
                 }
             }
             is String -> {
