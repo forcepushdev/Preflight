@@ -5,7 +5,9 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.actionSystem.ex.ActionUtil
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.project.DumbAwareToggleAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindowManager
@@ -13,6 +15,9 @@ import com.intellij.openapi.wm.ToolWindowManager
 interface ReviewController {
     fun navigate(kind: NavKind, direction: NavDirection)
     fun toggleReviewed()
+
+    /** Whether the file shown in the diff is reviewed; null when no file is shown. */
+    fun currentFileReviewState(): Boolean?
 }
 
 /**
@@ -42,6 +47,8 @@ class ReviewNavigationService(private val project: Project) {
     fun toggleReviewed() {
         target?.toggleReviewed()
     }
+
+    fun currentFileReviewState(): Boolean? = target?.currentFileReviewState()
 
     private fun withController(call: (ReviewController) -> Unit) {
         target?.let { return call(it) }
@@ -76,15 +83,22 @@ class NextChangeAction : ReviewNavigationAction(NavKind.CHANGE, NavDirection.NEX
 class PreviousChangeAction : ReviewNavigationAction(NavKind.CHANGE, NavDirection.PREVIOUS)
 
 /** Marks the file shown in the Preflight diff as reviewed, or clears the mark. */
-class ToggleReviewedAction : DumbAwareAction() {
+class ToggleReviewedAction : DumbAwareToggleAction() {
 
     override fun getActionUpdateThread() = ActionUpdateThread.BGT
 
-    override fun update(e: AnActionEvent) {
-        e.presentation.isEnabled = e.project != null
+    override fun isSelected(e: AnActionEvent): Boolean =
+        e.project?.service<ReviewNavigationService>()?.currentFileReviewState() == true
+
+    override fun setSelected(e: AnActionEvent, state: Boolean) {
+        e.project?.service<ReviewNavigationService>()?.toggleReviewed()
     }
 
-    override fun actionPerformed(e: AnActionEvent) {
-        e.project?.service<ReviewNavigationService>()?.toggleReviewed()
+    override fun update(e: AnActionEvent) {
+        super.update(e)
+        val state = e.project?.service<ReviewNavigationService>()?.currentFileReviewState()
+        e.presentation.isEnabled = state != null
+        e.presentation.text = if (state == true) "Reviewed" else "Mark as Reviewed"
+        e.presentation.putClientProperty(ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
     }
 }

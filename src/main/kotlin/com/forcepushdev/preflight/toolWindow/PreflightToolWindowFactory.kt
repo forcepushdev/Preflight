@@ -97,6 +97,19 @@ private class PreflightPanel(
     private val treeRoot = DefaultMutableTreeNode("root")
     private val treeModel = DefaultTreeModel(treeRoot)
     private val fileTree = object : Tree(treeModel) {
+        // A press on a file's review checkbox toggles the mark instead of selecting (and opening) the file.
+        override fun processMouseEvent(e: MouseEvent) {
+            if (e.id == MouseEvent.MOUSE_PRESSED && javax.swing.SwingUtilities.isLeftMouseButton(e)) {
+                val file = reviewCheckboxFileAt(e)
+                if (file != null) {
+                    e.consume()
+                    toggleReviewed(file)
+                    return
+                }
+            }
+            super.processMouseEvent(e)
+        }
+
         override fun updateUI() {
             super.updateUI()
             (ui as? javax.swing.plaf.basic.BasicTreeUI)?.apply {
@@ -372,6 +385,7 @@ private class PreflightPanel(
                 if (scrollTarget is NavTarget.Line) {
                     request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE, com.intellij.openapi.util.Pair.create(Side.RIGHT, scrollTarget.line))
                 }
+                request.putUserData(DiffUserDataKeys.CONTEXT_ACTIONS, listOf(ActionManager.getInstance().getAction("Preflight.ToggleReviewed")))
                 val scrollPolicy = when (scrollTarget) {
                     is NavTarget.FirstChange -> DiffUserDataKeysEx.ScrollToPolicy.FIRST_CHANGE
                     is NavTarget.LastChange -> DiffUserDataKeysEx.ScrollToPolicy.LAST_CHANGE
@@ -455,13 +469,30 @@ private class PreflightPanel(
     }
 
     override fun toggleReviewed() {
-        val file = currentFile ?: return
+        currentFile?.let { toggleReviewed(it) }
+    }
+
+    override fun currentFileReviewState(): Boolean? = currentFile?.let { it in reviewedFiles }
+
+    private fun reviewCheckboxFileAt(e: MouseEvent): String? {
+        val path = fileTree.getPathForLocation(e.x, e.y) ?: return null
+        val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return null
+        if (node.userObject !is Change) return null
+        val bounds = fileTree.getPathBounds(path) ?: return null
+        if (e.x > bounds.x + ReviewCheckboxIcon(false).iconWidth + JBUI.scale(2)) return null
+        return changeLeaves().firstOrNull { it.second === node }?.first
+    }
+
+    private fun toggleReviewed(file: String) {
         // The mark hashes the file on disk, so unsaved edits have to be on disk first.
         project.basePath?.let { LocalFileSystem.getInstance().findFileByPath("$it/$file") }
             ?.let { vf -> FileDocumentManager.getInstance().getCachedDocument(vf) }
             ?.let { FileDocumentManager.getInstance().saveDocument(it) }
         val commit = currentRepo?.currentRevision
         val wasReviewed = file in reviewedFiles
+        // Show the new state right away; recomputeReviewed() confirms it from disk.
+        reviewedFiles = if (wasReviewed) reviewedFiles - file else reviewedFiles + file
+        fileTree.repaint()
         ApplicationManager.getApplication().executeOnPooledThread {
             if (wasReviewed) reviewedStore.unmark(file) else reviewedStore.markReviewed(file, commit)
             recomputeReviewed()
@@ -736,11 +767,10 @@ private class FileChangeTreeCellRenderer(
                 val filePath = obj.afterRevision?.file ?: obj.beforeRevision?.file
                 val name = filePath?.name ?: return
                 val fileType = FileTypeManager.getInstance().getFileTypeByFileName(name)
-                icon = fileType.icon
                 val relPath = filePath.path.removePrefix("$basePath/")
                 val current = isShownInDiff(relPath)
                 val reviewed = isReviewed(relPath)
-                if (reviewed) append("✓ ", SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, REVIEWED_COLOR))
+                icon = com.intellij.ui.RowIcon(ReviewCheckboxIcon(reviewed), fileType.icon)
                 val status = if (reviewed) SimpleTextAttributes.GRAYED_ATTRIBUTES else fileStatusAttributes(obj, filePath.path)
                 append(name, if (current) status.derive(SimpleTextAttributes.STYLE_BOLD, null, null, null) else status)
                 if (obj.type == Change.Type.MOVED) {
