@@ -41,6 +41,8 @@ import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.PopupHandler
+import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.SearchTextField
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.ColoredTreeCellRenderer
@@ -157,12 +159,15 @@ private class PreflightPanel(
         addActionListener { showDiffBasePopup() }
     }.also { updateDiffBaseButton(it, selectedDiffBase) }
 
-    private fun buildBranchPopupTree(): DefaultMutableTreeNode {
+    private fun buildBranchPopupTree(filter: String = ""): DefaultMutableTreeNode {
         val root = DefaultMutableTreeNode()
+        val matches = { branch: String -> branch.contains(filter.trim(), ignoreCase = true) }
+        val localBranches = currentLocalBranches.filter(matches)
+        val remoteBranches = currentRemoteBranches.filter(matches)
 
-        if (currentLocalBranches.isNotEmpty()) {
+        if (localBranches.isNotEmpty()) {
             val localNode = DefaultMutableTreeNode("Local")
-            for (branch in currentLocalBranches) {
+            for (branch in localBranches) {
                 val parts = branch.split("/")
                 var current = localNode
                 for (i in 0 until parts.size - 1) {
@@ -177,7 +182,7 @@ private class PreflightPanel(
             root.add(localNode)
         }
 
-        val remoteGroups = currentRemoteBranches.groupBy { it.substringBefore("/") }
+        val remoteGroups = remoteBranches.groupBy { it.substringBefore("/") }
         for ((remoteName, branches) in remoteGroups) {
             val remoteNode = DefaultMutableTreeNode(remoteName)
             for (branch in branches) {
@@ -227,6 +232,14 @@ private class PreflightPanel(
         }
     }
 
+    private fun firstBranchLeafPath(tree: Tree): TreePath? {
+        val root = tree.model.root as? DefaultMutableTreeNode ?: return null
+        return root.depthFirstEnumeration().asSequence()
+            .filterIsInstance<DefaultMutableTreeNode>()
+            .firstOrNull { it.userObject is BranchLeaf }
+            ?.let { TreePath(it.path) }
+    }
+
     private fun showDiffBasePopup() {
         val branchTree = Tree(DefaultTreeModel(buildBranchPopupTree())).apply {
             isRootVisible = false
@@ -266,17 +279,47 @@ private class PreflightPanel(
             selectedDiffBase is DiffBase.Commit && it is CommitLeaf && it.sha == lastSelectedCommitSha
         }
 
+        val branchSearch = SearchTextField(false).apply {
+            textEditor.emptyText.text = "Search branches"
+        }
+        branchSearch.addDocumentListener(object : DocumentAdapter() {
+            override fun textChanged(e: javax.swing.event.DocumentEvent) {
+                branchTree.model = DefaultTreeModel(buildBranchPopupTree(branchSearch.text))
+                var row = 0
+                while (row < branchTree.rowCount) branchTree.expandRow(row++)
+            }
+        })
+        branchSearch.textEditor.addKeyListener(object : java.awt.event.KeyAdapter() {
+            override fun keyPressed(e: java.awt.event.KeyEvent) {
+                when (e.keyCode) {
+                    // Enter picks the first match, which makes a typed name plus Enter the fast path.
+                    java.awt.event.KeyEvent.VK_ENTER -> firstBranchLeafPath(branchTree)?.let {
+                        e.consume()
+                        branchTree.selectionPath = it
+                    }
+                    java.awt.event.KeyEvent.VK_DOWN -> {
+                        e.consume()
+                        branchTree.requestFocusInWindow()
+                    }
+                }
+            }
+        })
+        val branchPanel = JPanel(BorderLayout()).apply {
+            add(branchSearch, BorderLayout.NORTH)
+            add(JBScrollPane(branchTree), BorderLayout.CENTER)
+        }
+
         val tabs = JTabbedPane().apply {
-            addTab("Branches", JBScrollPane(branchTree))
+            addTab("Branches", branchPanel)
             addTab("Commits", JBScrollPane(commitTree))
             preferredSize = Dimension(320, 340)
             selectedIndex = lastActiveDiffBaseTabIndex.coerceIn(0, tabCount - 1)
         }
         tabs.addChangeListener { lastActiveDiffBaseTabIndex = tabs.selectedIndex }
 
-        val focusedTree = if (tabs.selectedIndex == 1) commitTree else branchTree
+        val focused = if (tabs.selectedIndex == 1) commitTree else branchSearch.textEditor
         val popup = JBPopupFactory.getInstance()
-            .createComponentPopupBuilder(tabs, focusedTree)
+            .createComponentPopupBuilder(tabs, focused)
             .setRequestFocus(true)
             .setResizable(true)
             .setMinSize(Dimension(240, 200))
@@ -318,6 +361,7 @@ private class PreflightPanel(
             "Preflight",
             DefaultActionGroup(
                 ActionManager.getInstance().getAction("Preflight.ToggleReviewed"),
+                ActionManager.getInstance().getAction("Preflight.OpenCommentsMarkdown"),
                 object : AnAction("Refresh", "Reload changed files and comments", AllIcons.Actions.Refresh) {
                     override fun actionPerformed(e: AnActionEvent) = reloadComments()
                 },

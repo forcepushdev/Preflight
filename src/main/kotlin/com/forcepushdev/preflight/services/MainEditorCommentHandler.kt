@@ -98,7 +98,10 @@ class MainEditorCommentHandler(private val project: Project) : EditorFactoryList
                     val hasCommentsChange = key.pollEvents().any { it.context()?.toString() == "comments.json" }
                     key.reset()
                     if (hasCommentsChange) {
-                        ApplicationManager.getApplication().invokeLater { refreshAllInlays() }
+                        ApplicationManager.getApplication().invokeLater {
+                            refreshAllInlays()
+                            project.service<CommentMarkdownExporter>().refreshIfPresent()
+                        }
                     }
                 }
             } catch (_: InterruptedException) {

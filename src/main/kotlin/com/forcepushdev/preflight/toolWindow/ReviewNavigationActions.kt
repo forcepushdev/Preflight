@@ -11,6 +11,9 @@ import com.intellij.openapi.project.DumbAwareToggleAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindowManager
+import com.forcepushdev.preflight.services.CommentMarkdownExporter
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.LocalFileSystem
 
 interface ReviewController {
     fun navigate(kind: NavKind, direction: NavDirection)
@@ -100,5 +103,22 @@ class ToggleReviewedAction : DumbAwareToggleAction() {
         e.presentation.isEnabled = state != null
         e.presentation.text = if (state == true) "Reviewed" else "Mark as Reviewed"
         e.presentation.putClientProperty(ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
+    }
+}
+
+/** Writes the open comments to `.preflight/comments.md` and opens it, to read them before handing them to the agent. */
+class OpenCommentsMarkdownAction : DumbAwareAction() {
+
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabled = e.project != null
+    }
+
+    override fun actionPerformed(e: AnActionEvent) {
+        val project = e.project ?: return
+        val file = project.service<CommentMarkdownExporter>().export() ?: return
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) ?: return
+        FileEditorManager.getInstance(project).openFile(virtualFile, true)
     }
 }

@@ -82,4 +82,38 @@ class BranchDiffServiceTest : BasePlatformTestCase() {
 
         assertEquals(listOf(CommitInfo("aaa111", "fix: handle null anchors", 0L)), result)
     }
+
+    fun testDetectMainBranch_remoteHeadWins() {
+        val result = service.detectMainBranch(listOf("origin/develop"), listOf("origin/develop", "origin/main"))
+
+        assertEquals("origin/develop", result)
+    }
+
+    fun testDetectMainBranch_branchMerelyEndingInMain_isNotPicked_regression() {
+        val result = service.detectMainBranch(emptyList(), listOf("origin/old/feature/main", "origin/develop"))
+
+        assertEquals("origin/develop", result)
+    }
+
+    fun testDetectMainBranch_prefersMainOverMasterOverDevelop() {
+        assertEquals("origin/main", service.detectMainBranch(emptyList(), listOf("origin/develop", "origin/master", "origin/main")))
+        assertEquals("origin/master", service.detectMainBranch(emptyList(), listOf("origin/develop", "origin/master")))
+    }
+
+    fun testDetectMainBranch_prefersOriginOverOtherRemotes() {
+        assertEquals("origin/main", service.detectMainBranch(emptyList(), listOf("upstream/main", "origin/main")))
+        assertEquals("origin/develop", service.detectMainBranch(listOf("upstream/main", "origin/develop"), listOf("upstream/main", "origin/develop")))
+    }
+
+    fun testDetectMainBranch_staleRemoteHead_isIgnored() {
+        assertEquals("origin/main", service.detectMainBranch(listOf("origin/gone"), listOf("origin/main")))
+    }
+
+    fun testDetectMainBranch_localOnly() {
+        assertEquals("develop", service.detectMainBranch(emptyList(), emptyList(), listOf("feature/x", "develop")))
+    }
+
+    fun testDetectMainBranch_nothingKnown_defaultsToMain() {
+        assertEquals("main", service.detectMainBranch(emptyList(), listOf("origin/feature/x")))
+    }
 }

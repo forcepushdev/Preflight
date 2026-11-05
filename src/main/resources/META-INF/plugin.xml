@@ -28,6 +28,8 @@
             serviceImplementation="com.forcepushdev.preflight.toolWindow.ReviewNavigationService"/>
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.ReviewedStore"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.services.CommentMarkdownExporter"/>
         <notificationGroup id="Preflight" displayType="BALLOON"/>
     </extensions>
 
@@ -64,6 +66,11 @@
                     icon="AllIcons.Actions.Checked">
                 <keyboard-shortcut keymap="$default" first-keystroke="control alt shift R"/>
             </action>
+            <action id="Preflight.OpenCommentsMarkdown"
+                    class="com.forcepushdev.preflight.toolWindow.OpenCommentsMarkdownAction"
+                    text="Preflight: Open Comments as Markdown"
+                    description="Write the open review comments to .preflight/comments.md and open it"
+                    icon="AllIcons.Actions.Preview"/>
         </group>
     </actions>
 </idea-plugin>

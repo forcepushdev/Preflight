@@ -11,6 +11,7 @@ import git4idea.commands.GitLineHandler
 import git4idea.changes.GitChangeUtils
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryManager
+import java.io.File
 
 @Service(Service.Level.PROJECT)
 class BranchDiffService(private val project: Project) {
@@ -21,7 +22,21 @@ class BranchDiffService(private val project: Project) {
     fun getMainBranch(): String {
         val repo = getRepository() ?: return "main"
         val remoteNames = repo.branches.remoteBranches.map { it.name }
-        return detectMainBranch(remoteNames)
+        val localNames = repo.branches.localBranches.map { it.name }
+        return detectMainBranch(readRemoteHeads(repo), remoteNames, localNames)
+    }
+
+    /**
+     * The default branch each remote advertises (`refs/remotes/<remote>/HEAD`, set by clone or
+     * `git remote set-head`), e.g. "origin/develop". Read from disk rather than via git, since the
+     * default branch is needed on the EDT when the tool window opens.
+     */
+    private fun readRemoteHeads(repo: GitRepository): List<String> {
+        val remotesDir = File(repo.repositoryFiles.refsHeadsFile.parentFile, "remotes")
+        return repo.remotes.map { it.name }.mapNotNull { remote ->
+            val headFile = File(remotesDir, "$remote/HEAD").takeIf { it.isFile } ?: return@mapNotNull null
+            headFile.readText().trim().removePrefix("ref: refs/remotes/").takeIf { it.startsWith("$remote/") }
+        }
     }
 
     fun getAllBranches(): Pair<List<String>, List<String>> {
@@ -105,10 +120,23 @@ class BranchDiffService(private val project: Project) {
         return if (result.success()) result.output.joinToString("\n") else ""
     }
 
-    internal fun detectMainBranch(branchNames: List<String>): String =
-        branchNames.firstOrNull { it == "main" || it.endsWith("/main") }
-            ?: branchNames.firstOrNull { it == "master" || it.endsWith("/master") }
-            ?: "main"
+    /**
+     * The remote's advertised default branch wins (origin first). Otherwise a conventional name is
+     * looked up exactly as `<remote>/<name>` or `<name>` — never by suffix, so an old
+     * "feature/main" can't be mistaken for the default branch.
+     */
+    internal fun detectMainBranch(remoteHeads: List<String>, remoteBranches: List<String>, localBranches: List<String> = emptyList()): String {
+        val all = remoteBranches + localBranches
+        remoteHeads.sortedBy { if (it.startsWith("origin/")) 0 else 1 }
+            .firstOrNull { it in all }
+            ?.let { return it }
+        val remotes = remoteBranches.map { it.substringBefore("/") }.distinct().sortedBy { if (it == "origin") 0 else 1 }
+        for (name in listOf("main", "master", "develop")) {
+            remotes.map { "$it/$name" }.firstOrNull { it in remoteBranches }?.let { return it }
+            if (name in localBranches) return name
+        }
+        return "main"
+    }
 
     internal fun parseMergeBase(output: String): String? = output.trim().takeIf { it.isNotEmpty() }
 
