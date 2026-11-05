@@ -9,6 +9,7 @@ import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.ui.JBColor
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import java.awt.FontMetrics
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.Point
@@ -41,10 +42,8 @@ class CommentInlayRenderer(
     }
 
     override fun calcHeightInPixels(inlay: Inlay<*>): Int {
-        val editor = inlay.editor
-        val font = UIUtil.getLabelFont()
-        val fm = editor.contentComponent.getFontMetrics(font)
-        val maxWidth = maxOf(editor.scrollingModel.visibleArea.width - 2 * PADDING, 100)
+        val fm = layoutMetrics(inlay)
+        val maxWidth = wrapWidth(calcWidthInPixels(inlay))
         val commentLines = wrapLines(comment.comment, maxWidth) { fm.stringWidth(it) }.size
         // +2 per reply: one row for the author label, one for its own Edit/Copy action row.
         val replyLines = comment.replies.sumOf { wrapLines("  ↳ ${it.text}", maxWidth - 12) { fm.stringWidth(it) }.size + 2 }
@@ -63,12 +62,17 @@ class CommentInlayRenderer(
         g2.drawLine(targetRegion.x, targetRegion.y, targetRegion.x + targetRegion.width, targetRegion.y)
         g2.drawLine(targetRegion.x, targetRegion.y + targetRegion.height - 1, targetRegion.x + targetRegion.width, targetRegion.y + targetRegion.height - 1)
         g2.font = UIUtil.getLabelFont()
-        paintExpanded(g2, targetRegion)
+        paintExpanded(g2, targetRegion, layoutMetrics(inlay))
     }
 
-    private fun paintExpanded(g: Graphics2D, r: Rectangle) {
+    // Wrapping must measure exactly like calcHeightInPixels, otherwise paint produces more rows than
+    // the inlay reserved and the action row is drawn below the inlay, over the code.
+    private fun layoutMetrics(inlay: Inlay<*>): FontMetrics =
+        inlay.editor.contentComponent.getFontMetrics(UIUtil.getLabelFont())
+
+    private fun paintExpanded(g: Graphics2D, r: Rectangle, layoutFm: FontMetrics) {
         val fm = g.fontMetrics
-        val maxWidth = maxOf(r.width - 2 * PADDING, 100)
+        val maxWidth = wrapWidth(r.width)
         var yOff = PADDING
 
         val collapseIconWidth = fm.stringWidth(COLLAPSE_ICON)
@@ -85,7 +89,7 @@ class CommentInlayRenderer(
         g.font = UIUtil.getLabelFont()
 
         g.color = UIUtil.getLabelForeground()
-        for (wrappedLine in wrapLines(comment.comment, maxWidth) { fm.stringWidth(it) }) {
+        for (wrappedLine in wrapLines(comment.comment, maxWidth) { layoutFm.stringWidth(it) }) {
             g.drawString(wrappedLine, r.x + PADDING, r.y + yOff + fm.ascent)
             yOff += ROW_HEIGHT
         }
@@ -100,7 +104,7 @@ class CommentInlayRenderer(
             yOff += ROW_HEIGHT
             g.font = UIUtil.getLabelFont()
             g.color = UIUtil.getContextHelpForeground()
-            val wrappedLines = wrapLines("  ↳ ${reply.text}", maxWidth - 12) { fm.stringWidth(it) }
+            val wrappedLines = wrapLines("  ↳ ${reply.text}", maxWidth - 12) { layoutFm.stringWidth(it) }
             for (wrappedLine in wrappedLines) {
                 g.drawString(wrappedLine, r.x + PADDING + 12, r.y + yOff + fm.ascent)
                 yOff += ROW_HEIGHT
@@ -233,6 +237,8 @@ class CommentInlayRenderer(
         private const val PADDING = 8
         private const val ACCENT_BAR_WIDTH = 3
         private const val COLLAPSE_ICON = "▼"
+
+        private fun wrapWidth(inlayWidth: Int) = maxOf(inlayWidth - 2 * PADDING, 100)
 
         internal fun wrapLines(text: String, maxWidth: Int, measure: (String) -> Int): List<String> {
             if (maxWidth <= 0 || measure(text) <= maxWidth) return listOf(text)

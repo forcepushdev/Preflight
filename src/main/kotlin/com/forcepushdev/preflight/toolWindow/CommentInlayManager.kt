@@ -67,8 +67,11 @@ class CommentInlayManager(
                 }
             }
         }
-        editor.contentComponent.addComponentListener(resizeListener)
-        Disposer.register(ownDisposable) { editor.contentComponent.removeComponentListener(resizeListener) }
+        // The viewport is what the inlay width follows; the content component does not resize when
+        // the editor narrows while a line is wider than the view.
+        val viewport = editor.scrollPane.viewport
+        viewport.addComponentListener(resizeListener)
+        Disposer.register(ownDisposable) { viewport.removeComponentListener(resizeListener) }
 
         editor.addEditorMouseListener(object : EditorMouseListener {
             override fun mouseClicked(event: EditorMouseEvent) {
