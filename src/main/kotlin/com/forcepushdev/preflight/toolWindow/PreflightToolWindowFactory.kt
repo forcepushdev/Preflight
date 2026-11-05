@@ -147,6 +147,8 @@ private class PreflightPanel(
     private var restoringSelection = false
     // Where the diff opened by the next tree selection should scroll to; set by navigate().
     private var pendingScrollTarget: NavTarget? = null
+    // Comment the last "next/previous comment" step landed on; see ReviewNavigation.nextComment.
+    private var lastCommentJump: String? = null
     private var currentInlayManager: CommentInlayManager? = null
     private var currentRemoteBranches: List<String> = emptyList()
     private var currentLocalBranches: List<String> = emptyList()
@@ -393,6 +395,9 @@ private class PreflightPanel(
                 }
                 diffProcessor.setRequest(request, scrollPolicy) {
                     val editor = currentEditor()
+                    // SCROLL_TO_LINE only scrolls the view; place the caret too, since the next
+                    // navigation step starts from the caret line.
+                    if (editor != null && scrollTarget is NavTarget.Line) moveCaretTo(editor, scrollTarget.line)
                     if (editor != null) {
                         gutterHandler.attach(editor, relativePath, disposable)
                         currentInlayManager?.let { Disposer.dispose(it) }
@@ -417,15 +422,15 @@ private class PreflightPanel(
         val file = currentFile.takeIf { editor != null }
         val line = editor?.caretModel?.logicalPosition?.line ?: -1
         val target = when (kind) {
-            NavKind.COMMENT -> ReviewNavigation.nextComment(files, { commentLines(it, editor) }, file, line, direction)
+            NavKind.COMMENT -> ReviewNavigation.nextComment(
+                files, { commentPositions(it, editor) }, file, line, direction, lastCommentJump?.takeIf { file != null }
+            )
             NavKind.CHANGE -> ReviewNavigation.nextChange(files, currentChangeLines(), file, line, direction)
         } ?: return
+        lastCommentJump = (target as? NavTarget.Line)?.commentId
         if (target.file == file && editor != null) {
             when (target) {
-                is NavTarget.Line -> {
-                    editor.caretModel.moveToLogicalPosition(LogicalPosition(target.line, 0))
-                    editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
-                }
+                is NavTarget.Line -> moveCaretTo(editor, target.line)
                 is NavTarget.FirstChange -> currentDiffViewer()?.scrollToChange(DiffUserDataKeysEx.ScrollToPolicy.FIRST_CHANGE)
                 is NavTarget.LastChange -> currentDiffViewer()?.scrollToChange(DiffUserDataKeysEx.ScrollToPolicy.LAST_CHANGE)
             }
@@ -457,14 +462,14 @@ private class PreflightPanel(
             .toList()
     }
 
-    private fun commentLines(file: String, editor: EditorEx?): List<Int> {
+    private fun commentPositions(file: String, editor: EditorEx?): List<CommentPosition> {
         val registry = project.service<CommentAnchorRegistry>()
         return commentStore.getCommentsForFile(file)
             .filter { !it.resolved && !registry.isOrphaned(it.id) }
             .map { comment ->
                 // The open file's anchors track edits made since the last flush to comments.json.
                 val live = if (file == currentFile && editor != null) registry.currentRange(editor.document, comment.id) else null
-                live?.first ?: comment.startLine ?: comment.line
+                CommentPosition(live?.first ?: comment.startLine ?: comment.line, comment.id)
             }
     }
 
@@ -507,6 +512,11 @@ private class PreflightPanel(
                 fileTree.repaint()
             }
         }
+    }
+
+    private fun moveCaretTo(editor: EditorEx, line: Int) {
+        editor.caretModel.moveToLogicalPosition(LogicalPosition(line.coerceIn(0, maxOf(0, editor.document.lineCount - 1)), 0))
+        editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
     }
 
     private fun currentDiffViewer(): SimpleDiffViewer? =
