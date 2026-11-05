@@ -85,6 +85,8 @@ class PreviousCommentAction : ReviewNavigationAction(NavKind.COMMENT, NavDirecti
 class NextChangeAction : ReviewNavigationAction(NavKind.CHANGE, NavDirection.NEXT)
 class PreviousChangeAction : ReviewNavigationAction(NavKind.CHANGE, NavDirection.PREVIOUS)
 
+const val PREFLIGHT_TOOLBAR_PLACE = "Preflight"
+
 /** Marks the file shown in the Preflight diff as reviewed, or clears the mark. */
 class ToggleReviewedAction : DumbAwareToggleAction() {
 
@@ -102,7 +104,8 @@ class ToggleReviewedAction : DumbAwareToggleAction() {
         val state = e.project?.service<ReviewNavigationService>()?.currentFileReviewState()
         e.presentation.isEnabled = state != null
         e.presentation.text = if (state == true) "Reviewed" else "Mark as Reviewed"
-        e.presentation.putClientProperty(ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
+        // Labelled in the diff toolbar; in the Preflight tool window toolbar the icon plus tooltip is enough.
+        e.presentation.putClientProperty(ActionUtil.SHOW_TEXT_IN_TOOLBAR, e.place != PREFLIGHT_TOOLBAR_PLACE)
     }
 }
 
