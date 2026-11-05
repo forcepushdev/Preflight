@@ -24,6 +24,37 @@
             serviceImplementation="com.forcepushdev.preflight.services.CommentStore"/>
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.MainEditorCommentHandler"/>
+        <projectService
+            serviceImplementation="com.forcepushdev.preflight.toolWindow.ReviewNavigationService"/>
         <notificationGroup id="Preflight" displayType="BALLOON"/>
     </extensions>
+
+    <actions>
+        <group id="Preflight.Navigation" text="Preflight Review Navigation" popup="false">
+            <action id="Preflight.NextChange"
+                    class="com.forcepushdev.preflight.toolWindow.NextChangeAction"
+                    text="Preflight: Next Change"
+                    description="Jump to the next change of the review diff, continuing in the next file">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt shift DOWN"/>
+            </action>
+            <action id="Preflight.PreviousChange"
+                    class="com.forcepushdev.preflight.toolWindow.PreviousChangeAction"
+                    text="Preflight: Previous Change"
+                    description="Jump to the previous change of the review diff, continuing in the previous file">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt shift UP"/>
+            </action>
+            <action id="Preflight.NextComment"
+                    class="com.forcepushdev.preflight.toolWindow.NextCommentAction"
+                    text="Preflight: Next Comment"
+                    description="Jump to the next open review comment, continuing in the next file">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt shift RIGHT"/>
+            </action>
+            <action id="Preflight.PreviousComment"
+                    class="com.forcepushdev.preflight.toolWindow.PreviousCommentAction"
+                    text="Preflight: Previous Comment"
+                    description="Jump to the previous open review comment, continuing in the previous file">
+                <keyboard-shortcut keymap="$default" first-keystroke="control alt shift LEFT"/>
+            </action>
+        </group>
+    </actions>
 </idea-plugin>

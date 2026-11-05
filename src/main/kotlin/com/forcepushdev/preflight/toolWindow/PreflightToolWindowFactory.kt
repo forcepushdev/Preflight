@@ -10,7 +10,10 @@ import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.impl.DiffRequestProcessor
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
+import com.intellij.diff.tools.simple.SimpleDiffViewer
 import com.intellij.diff.tools.util.side.TwosideTextDiffViewer
+import com.intellij.diff.util.DiffUserDataKeys
+import com.intellij.diff.util.Side
 import com.intellij.diff.util.DiffUserDataKeysEx
 import com.intellij.icons.AllIcons
 import com.intellij.notification.NotificationGroupManager
@@ -21,6 +24,8 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
+import com.intellij.openapi.editor.LogicalPosition
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.fileTypes.FileTypeManager
@@ -81,7 +86,7 @@ private class PreflightPanel(
     private val project: Project,
     private val service: BranchDiffService,
     private val disposable: Disposable
-) : JPanel(BorderLayout()) {
+) : JPanel(BorderLayout()), ReviewNavigable {
 
     private val treeRoot = DefaultMutableTreeNode("root")
     private val treeModel = DefaultTreeModel(treeRoot)
@@ -110,6 +115,8 @@ private class PreflightPanel(
     private val gutterHandler = CommentGutterHandler(commentStore) { onCommentAdded() }
     private val outdatedPanel = OutdatedCommentsPanel(commentStore) { refresh() }
     private var currentFile: String? = null
+    // Where the diff opened by the next tree selection should scroll to; set by navigate().
+    private var pendingScrollTarget: NavTarget? = null
     private var currentInlayManager: CommentInlayManager? = null
     private var currentRemoteBranches: List<String> = emptyList()
     private var currentLocalBranches: List<String> = emptyList()
@@ -305,13 +312,15 @@ private class PreflightPanel(
         fileTree.addTreeSelectionListener {
             val node = fileTree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return@addTreeSelectionListener
             val change = node.userObject as? Change ?: return@addTreeSelectionListener
-            openDiff(change)
+            val scrollTarget = pendingScrollTarget
+            pendingScrollTarget = null
+            openDiff(change, scrollTarget)
         }
 
         DumbService.getInstance(project).runWhenSmart { refresh() }
     }
 
-    private fun openDiff(change: Change) {
+    private fun openDiff(change: Change, scrollTarget: NavTarget? = null) {
         val repo = currentRepo ?: return
         val revision = currentRevision ?: return
         val filePath = change.afterRevision?.file ?: change.beforeRevision?.file ?: return
@@ -334,9 +343,16 @@ private class PreflightPanel(
                 val headContent = change.virtualFile
                     ?.let { DiffContentFactory.getInstance().create(project, it) }
                     ?: DiffContentFactory.getInstance().create("")
-                diffProcessor.setRequest(
-                    SimpleDiffRequest("Diff: $relativePath", baseContent, headContent, "base", "HEAD")
-                ) {
+                val request = SimpleDiffRequest("Diff: $relativePath", baseContent, headContent, "base", "HEAD")
+                if (scrollTarget is NavTarget.Line) {
+                    request.putUserData(DiffUserDataKeys.SCROLL_TO_LINE, com.intellij.openapi.util.Pair.create(Side.RIGHT, scrollTarget.line))
+                }
+                val scrollPolicy = when (scrollTarget) {
+                    is NavTarget.FirstChange -> DiffUserDataKeysEx.ScrollToPolicy.FIRST_CHANGE
+                    is NavTarget.LastChange -> DiffUserDataKeysEx.ScrollToPolicy.LAST_CHANGE
+                    else -> null
+                }
+                diffProcessor.setRequest(request, scrollPolicy) {
                     val editor = currentEditor()
                     if (editor != null) {
                         gutterHandler.attach(editor, relativePath, disposable)
@@ -351,7 +367,72 @@ private class PreflightPanel(
         }
     }
 
-    private fun currentEditor(): EditorEx? = diffProcessor.editor2()
+    private fun currentEditor(): EditorEx? = if (diffProcessor.isDisposed) null else diffProcessor.editor2()
+
+    override fun navigate(kind: NavKind, direction: NavDirection) {
+        val leaves = changeLeaves()
+        if (leaves.isEmpty()) return
+        val files = leaves.map { it.first }
+        val editor = currentEditor()
+        val file = currentFile.takeIf { editor != null }
+        val line = editor?.caretModel?.logicalPosition?.line ?: -1
+        val target = when (kind) {
+            NavKind.COMMENT -> ReviewNavigation.nextComment(files, { commentLines(it, editor) }, file, line, direction)
+            NavKind.CHANGE -> ReviewNavigation.nextChange(files, currentChangeLines(), file, line, direction)
+        } ?: return
+        if (target.file == file && editor != null) {
+            when (target) {
+                is NavTarget.Line -> {
+                    editor.caretModel.moveToLogicalPosition(LogicalPosition(target.line, 0))
+                    editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
+                }
+                is NavTarget.FirstChange -> currentDiffViewer()?.scrollToChange(DiffUserDataKeysEx.ScrollToPolicy.FIRST_CHANGE)
+                is NavTarget.LastChange -> currentDiffViewer()?.scrollToChange(DiffUserDataKeysEx.ScrollToPolicy.LAST_CHANGE)
+            }
+            DiffEditorTabFilesManager.getInstance(project).showDiffFile(diffFile, true)
+            return
+        }
+        val node = leaves.first { it.first == target.file }.second
+        val path = TreePath(node.path)
+        fileTree.scrollPathToVisible(path)
+        if (fileTree.selectionPath == path) {
+            openDiff(node.userObject as Change, target)
+        } else {
+            pendingScrollTarget = target
+            fileTree.selectionPath = path
+        }
+    }
+
+    /** Relative path and tree node of every changed file, in the order the tree shows them. */
+    private fun changeLeaves(): List<Pair<String, DefaultMutableTreeNode>> {
+        val repoRoot = currentRepo?.root?.path
+        return treeRoot.depthFirstEnumeration().asSequence()
+            .filterIsInstance<DefaultMutableTreeNode>()
+            .mapNotNull { node ->
+                val change = node.userObject as? Change ?: return@mapNotNull null
+                val path = (change.afterRevision?.file ?: change.beforeRevision?.file)?.path ?: return@mapNotNull null
+                val relative = if (repoRoot != null) path.removePrefix("$repoRoot/") else path
+                relative to node
+            }
+            .toList()
+    }
+
+    private fun commentLines(file: String, editor: EditorEx?): List<Int> {
+        val registry = project.service<CommentAnchorRegistry>()
+        return commentStore.getCommentsForFile(file)
+            .filter { !it.resolved && !registry.isOrphaned(it.id) }
+            .map { comment ->
+                // The open file's anchors track edits made since the last flush to comments.json.
+                val live = if (file == currentFile && editor != null) registry.currentRange(editor.document, comment.id) else null
+                live?.first ?: comment.startLine ?: comment.line
+            }
+    }
+
+    private fun currentDiffViewer(): SimpleDiffViewer? =
+        if (diffProcessor.isDisposed) null else diffProcessor.activeViewer as? SimpleDiffViewer
+
+    private fun currentChangeLines(): List<Int> =
+        currentDiffViewer()?.diffChanges?.map { it.getStartLine(Side.RIGHT) }.orEmpty()
 
     private fun onCommentAdded() {
         val editor = currentEditor() ?: return
@@ -434,6 +515,7 @@ private class PreflightPanel(
                 }.toSet()
                 val orphanedIds = project.service<CommentAnchorRegistry>().orphanedIds()
                 outdatedPanel.refresh(commentStore.getStaleComments(changedFilePaths, orphanedIds))
+                project.service<ReviewNavigationService>().register(this, disposable)
                 if (fallbackTriggered) notifyBaseCommitFallback(effectiveDiffBase)
             }
         }
@@ -504,10 +586,14 @@ private class PreflightPanel(
         private var pendingRequest: DiffRequest? = null
         private var onApplied: (() -> Unit)? = null
 
-        fun setRequest(request: DiffRequest, onApplied: (() -> Unit)? = null) {
+        fun setRequest(
+            request: DiffRequest,
+            scrollToPolicy: DiffUserDataKeysEx.ScrollToPolicy? = null,
+            onApplied: (() -> Unit)? = null
+        ) {
             this.onApplied = onApplied
             pendingRequest = request
-            ApplicationManager.getApplication().invokeLater { updateRequest(false, null) }
+            ApplicationManager.getApplication().invokeLater { updateRequest(false, scrollToPolicy) }
         }
 
         override fun updateRequest(force: Boolean, scrollToPolicy: DiffUserDataKeysEx.ScrollToPolicy?) {
