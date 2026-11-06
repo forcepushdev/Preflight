@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-11-06
+### Added
+- Plugin icon (light and dark) and a Preflight icon for the tool window.
+
+### Changed
+- Replaced the deprecated `FileEditorManager.openFile(VirtualFile, boolean)` and the experimental `WriteIntentReadAction` with stable platform API.
+
 ## [0.0.3] - 2026-11-05
 ### Added
 - Review navigation: next/previous comment and next/previous change, continuing into the next/previous file of the Preflight file tree and wrapping around at the end. Resolved comments are skipped; comments on the same line are visited one by one. Available as actions (`Preflight.NextChange`, `Preflight.PreviousChange`, `Preflight.NextComment`, `Preflight.PreviousComment`) with remappable shortcuts, usable from IdeaVim.
