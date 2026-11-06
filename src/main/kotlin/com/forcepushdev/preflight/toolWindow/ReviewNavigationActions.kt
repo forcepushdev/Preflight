@@ -12,7 +12,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindowManager
 import com.forcepushdev.preflight.services.CommentMarkdownExporter
-import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.LocalFileSystem
 
 interface ReviewController {
@@ -122,6 +122,6 @@ class OpenCommentsMarkdownAction : DumbAwareAction() {
         val project = e.project ?: return
         val file = project.service<CommentMarkdownExporter>().export() ?: return
         val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(file) ?: return
-        FileEditorManager.getInstance(project).openFile(virtualFile, true)
+        OpenFileDescriptor(project, virtualFile).navigate(true)
     }
 }

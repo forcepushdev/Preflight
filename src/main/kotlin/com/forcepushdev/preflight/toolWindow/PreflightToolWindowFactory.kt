@@ -24,7 +24,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.WriteIntentReadAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.LogicalPosition
 import com.intellij.openapi.editor.ScrollType
@@ -534,21 +533,24 @@ private class PreflightPanel(
     }
 
     private fun toggleReviewed(file: String) {
-        // The mark hashes the file on disk, so unsaved edits have to be on disk first. Saving needs
-        // the write-intent lock, which a raw Swing mouse event (the tree checkbox) doesn't hold.
-        val documentManager = FileDocumentManager.getInstance()
-        project.basePath?.let { LocalFileSystem.getInstance().findFileByPath("$it/$file") }
-            ?.let { vf -> documentManager.getCachedDocument(vf) }
-            ?.takeIf { documentManager.isDocumentUnsaved(it) }
-            ?.let { document -> WriteIntentReadAction.run { documentManager.saveDocument(document) } }
         val commit = currentRepo?.currentRevision
         val wasReviewed = file in reviewedFiles
         // Show the new state right away; recomputeReviewed() confirms it from disk.
         reviewedFiles = if (wasReviewed) reviewedFiles - file else reviewedFiles + file
         fileTree.repaint()
-        ApplicationManager.getApplication().executeOnPooledThread {
-            if (wasReviewed) reviewedStore.unmark(file) else reviewedStore.markReviewed(file, commit)
-            recomputeReviewed()
+        // The mark hashes the file on disk, so unsaved edits have to be on disk first. Saving needs
+        // the write-intent lock, which a raw Swing mouse event (the tree checkbox) doesn't hold but
+        // invokeLater does.
+        ApplicationManager.getApplication().invokeLater {
+            val documentManager = FileDocumentManager.getInstance()
+            project.basePath?.let { LocalFileSystem.getInstance().findFileByPath("$it/$file") }
+                ?.let { vf -> documentManager.getCachedDocument(vf) }
+                ?.takeIf { documentManager.isDocumentUnsaved(it) }
+                ?.let { documentManager.saveDocument(it) }
+            ApplicationManager.getApplication().executeOnPooledThread {
+                if (wasReviewed) reviewedStore.unmark(file) else reviewedStore.markReviewed(file, commit)
+                recomputeReviewed()
+            }
         }
     }
 
