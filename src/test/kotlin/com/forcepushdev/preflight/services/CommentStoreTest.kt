@@ -226,4 +226,15 @@ class CommentStoreTest : BasePlatformTestCase() {
 
         assertTrue(stale.isEmpty())
     }
+
+    fun testRemoveReply_removesOnlyThatReply() {
+        val comment = PreflightComment("src/Foo.kt", 1, "Q")
+        store.addComment(comment)
+        store.addReply(comment.id, "first")
+        store.addReply(comment.id, "second", author = "agent")
+
+        store.removeReply(comment.id, 0)
+
+        assertEquals(listOf(Reply("second", "agent")), store.getComment(comment.id)!!.replies)
+    }
 }

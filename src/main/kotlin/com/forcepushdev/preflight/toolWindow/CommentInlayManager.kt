@@ -8,12 +8,14 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.Inlay
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.InlayProperties
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.editor.ex.EditorEx
+import com.intellij.openapi.editor.markup.CustomHighlighterRenderer
 import com.intellij.openapi.editor.markup.GutterIconRenderer
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
@@ -22,8 +24,10 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.util.Alarm
+import com.intellij.util.ui.JBUI
 import java.awt.Color
 import java.awt.Font
+import java.awt.Graphics
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.Icon
@@ -119,7 +123,7 @@ class CommentInlayManager(
             val isExpanded = expandedState.getOrPut(comment.id) { initiallyExpanded(comment) }
             if (isExpanded) {
                 val offset = editor.document.getLineEndOffset(renderLine)
-                val renderer = CommentInlayRenderer(comment, renderLine, this) { id ->
+                val renderer = CommentInlayRenderer(comment, renderLine, startLine, this) { id ->
                     expandedState[id] = false
                     refresh()
                 }
@@ -134,14 +138,14 @@ class CommentInlayManager(
 
             // One range highlighter instead of a line highlighter per line: it is a range marker,
             // so lines typed or pasted inside the commented block are covered without a refresh.
-            val attrs = TextAttributes(null, JBColor(Color(255, 243, 170), Color(90, 75, 15)), null, null, Font.PLAIN)
+            val attrs = TextAttributes(null, COMMENTED_LINES_BACKGROUND, null, null, Font.PLAIN)
             lineHighlighters += editor.markupModel.addRangeHighlighter(
                 editor.document.getLineStartOffset(startLine),
                 editor.document.getLineEndOffset(renderLine),
                 HighlighterLayer.SELECTION - 1,
                 attrs,
                 HighlighterTargetArea.LINES_IN_RANGE
-            )
+            ).apply { customRenderer = AccentBarRenderer }
         }
     }
 
@@ -184,6 +188,11 @@ class CommentInlayManager(
         refresh()
     }
 
+    fun onDeleteReply(id: String, replyIndex: Int) {
+        store.removeReply(id, replyIndex)
+        refresh()
+    }
+
     fun onResolve(id: String) {
         store.resolveComment(id)
         refresh()
@@ -198,5 +207,19 @@ class CommentInlayManager(
         store.removeComment(id)
         anchorRegistry?.unregister(editor.document, id)
         refresh()
+    }
+
+    // Paints the accent bar along the left edge of the commented lines, at the start of the text area.
+    private object AccentBarRenderer : CustomHighlighterRenderer {
+        override fun paint(editor: Editor, highlighter: RangeHighlighter, g: Graphics) {
+            val top = editor.offsetToXY(highlighter.startOffset).y
+            val bottom = editor.offsetToXY(highlighter.endOffset).y + editor.lineHeight
+            g.color = JBUI.CurrentTheme.Link.Foreground.ENABLED
+            g.fillRect(0, top, JBUI.scale(3), bottom - top)
+        }
+    }
+
+    private companion object {
+        val COMMENTED_LINES_BACKGROUND = JBColor(Color(232, 240, 254), Color(40, 52, 77))
     }
 }

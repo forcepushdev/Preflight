@@ -61,6 +61,9 @@ class CommentStore(private val project: Project) {
     fun editReply(id: String, replyIndex: Int, newText: String) =
         updateComment(id) { it.copy(replies = it.replies.toMutableList().also { r -> r[replyIndex] = r[replyIndex].copy(text = newText) }) }
 
+    fun removeReply(id: String, replyIndex: Int) =
+        updateComment(id) { it.copy(replies = it.replies.filterIndexed { i, _ -> i != replyIndex }) }
+
     fun updateAnchor(id: String, startLine: Int, line: Int, anchorText: String?) =
         updateComment(id) { it.copy(startLine = startLine, line = line, anchorText = anchorText) }
 
