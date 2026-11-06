@@ -17,7 +17,8 @@
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
             factoryClass="com.forcepushdev.preflight.toolWindow.PreflightToolWindowFactory"
-            id="Preflight"/>
+            id="Preflight"
+            icon="/icons/preflight.svg"/>
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.BranchDiffService"/>
         <projectService
