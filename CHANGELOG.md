@@ -7,8 +7,11 @@
 ## [0.0.4] - 2026-11-06
 ### Added
 - Plugin icon (light and dark) and a Preflight icon for the tool window.
+- Replies can be deleted.
 
 ### Changed
+- Comments are shown as cards: a header with author and line range (`You · Lines 3–4`), each reply in its own indented block with its own Edit/Delete/Copy, and buttons for the whole comment (Reply, Edit, Delete, Resolve/Reopen) below a separator. Agent replies are marked `✦ Agent`.
+- Commented lines are highlighted in blue with an accent bar on the left instead of yellow.
 - Replaced the deprecated `FileEditorManager.openFile(VirtualFile, boolean)` and the experimental `WriteIntentReadAction` with stable platform API.
 
 ## [0.0.3] - 2026-11-05
