@@ -32,6 +32,8 @@
         <projectService
             serviceImplementation="com.forcepushdev.preflight.services.CommentMarkdownExporter"/>
         <notificationGroup id="Preflight" displayType="BALLOON"/>
+        <editorActionHandler action="EditorCopy" order="first"
+                             implementationClass="com.forcepushdev.preflight.toolWindow.CommentSelectionCopyHandler"/>
     </extensions>
 
     <actions>

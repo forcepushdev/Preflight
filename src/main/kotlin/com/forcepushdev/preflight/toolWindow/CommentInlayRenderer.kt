@@ -3,6 +3,7 @@ package com.forcepushdev.preflight.toolWindow
 import com.forcepushdev.preflight.services.PreflightComment
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
+import com.intellij.openapi.editor.colors.EditorColors
 import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.ex.EditorEx
@@ -40,6 +41,11 @@ class CommentInlayRenderer(
     private val replyEditAreas = mutableListOf<Rectangle>()
     private val replyDeleteAreas = mutableListOf<Rectangle>()
     private val replyCopyAreas = mutableListOf<Rectangle>()
+
+    // Selectable text as last painted, and the selection over it.
+    private var textRows: List<TextRow> = emptyList()
+    private var selectionAnchor: TextPos? = null
+    private var selectionFocus: TextPos? = null
 
     override fun calcWidthInPixels(inlay: Inlay<*>): Int {
         val editorEx = inlay.editor as? EditorEx
@@ -85,10 +91,14 @@ class CommentInlayRenderer(
     // more rows than the inlay reserved and the buttons are drawn below the inlay, over the code.
     private fun layoutMetrics(inlay: Inlay<*>): Metrics {
         val component = inlay.editor.contentComponent
-        return Metrics(component.getFontMetrics(UIUtil.getLabelFont()), component.getFontMetrics(codeFont(inlay.editor)))
+        return Metrics(
+            component.getFontMetrics(UIUtil.getLabelFont()),
+            component.getFontMetrics(codeFont(inlay.editor)),
+            inlay.editor.colorsScheme.getColor(EditorColors.SELECTION_BACKGROUND_COLOR) ?: UIUtil.getListSelectionBackground(true)
+        )
     }
 
-    private class Metrics(val label: FontMetrics, val code: FontMetrics)
+    private class Metrics(val label: FontMetrics, val code: FontMetrics, val selection: Color)
 
     private fun codeFont(editor: Editor): Font =
         editor.colorsScheme.getFont(EditorFontType.PLAIN).deriveFont(UIUtil.getLabelFont().size2D - 1f)
@@ -106,6 +116,8 @@ class CommentInlayRenderer(
         val right = r.width - MARGIN - CARD_PADDING
         val textWidth = maxOf(right - left, 100)
         var y = MARGIN + CARD_PADDING
+        val rows = mutableListOf<TextRow>()
+        val selection = selectionAnchor?.let { a -> selectionFocus?.let { b -> if (a <= b) a to b else b to a } }
 
         fun text(s: String, x: Int, color: Color, font: Font = labelFont, rowHeight: Int = ROW_HEIGHT, top: Int = y) {
             g ?: return
@@ -126,37 +138,77 @@ class CommentInlayRenderer(
         fun runWidth(run: CommentText.Segment) =
             if (run.isCode) codeFm.stringWidth(run.text) + 2 * CODE_PAD else fm.stringWidth(run.text)
 
-        /** Comment or reply text, with inline code and fenced code blocks drawn as code. */
-        fun body(source: String, x: Int, width: Int) {
+        fun paintSelection(row: TextRow) {
+            g ?: return
+            val (start, end) = selection?.takeIf { it.first != it.second } ?: return
+            val index = rows.size
+            if (index < start.row || index > end.row) return
+            val from = row.xs[if (index == start.row) start.col else 0]
+            val to = if (index == end.row) row.xs[end.col] else row.xs.last() + SELECTION_EOL
+            g.color = metrics.selection
+            g.fillRect(r.x + from, r.y + row.top, to - from, row.height)
+        }
+
+        /**
+         * Comment or reply text, with inline code and fenced code blocks drawn as code. Its rows become
+         * selectable text in [group].
+         */
+        fun body(source: String, x: Int, width: Int, group: Int) {
             val color = UIUtil.getLabelForeground()
             for (block in CommentText.parse(source)) when (block) {
-                is CommentText.Prose -> for (row in CommentText.wrap(block.segments, width, ::runWidth)) {
-                    var cx = x
-                    for (run in row) {
-                        val w = runWidth(run)
-                        if (run.isCode) {
-                            roundedBox(cx, y + (ROW_HEIGHT - CODE_CHIP_HEIGHT) / 2, w, CODE_CHIP_HEIGHT)
-                            text(run.text, cx + CODE_PAD, color, codeFm.font)
-                        } else {
-                            text(run.text, cx, color)
+                is CommentText.Prose -> {
+                    val wrapped = CommentText.wrap(block.segments, width, ::runWidth)
+                    wrapped.forEachIndexed { rowIndex, runs ->
+                        val xs = mutableListOf(x)
+                        var cx = x
+                        for (run in runs) {
+                            val w = runWidth(run)
+                            val inner = if (run.isCode) cx + CODE_PAD else cx
+                            val m = if (run.isCode) codeFm else fm
+                            for (k in 1..run.text.length) {
+                                xs += if (k == run.text.length) cx + w else inner + m.stringWidth(run.text.substring(0, k))
+                            }
+                            cx += w
                         }
-                        cx += w
+                        val separator = if (rowIndex < wrapped.lastIndex) " " else "\n"
+                        val row = TextRow(group, y, ROW_HEIGHT, runs.joinToString("") { it.text }, xs.toIntArray(), x + width, separator)
+                        cx = x
+                        for (run in runs) {
+                            val w = runWidth(run)
+                            if (run.isCode) roundedBox(cx, y + (ROW_HEIGHT - CODE_CHIP_HEIGHT) / 2, w, CODE_CHIP_HEIGHT)
+                            cx += w
+                        }
+                        paintSelection(row)
+                        cx = x
+                        for (run in runs) {
+                            if (run.isCode) text(run.text, cx + CODE_PAD, color, codeFm.font) else text(run.text, cx, color)
+                            cx += runWidth(run)
+                        }
+                        rows += row
+                        y += ROW_HEIGHT
                     }
-                    y += ROW_HEIGHT
                 }
                 is CommentText.Code -> {
-                    val rows = block.lines.flatMap { line ->
-                        CommentText.wrapCode(line, width - 2 * CODE_BLOCK_PAD) { codeFm.stringWidth(it) }
+                    val codeRows = block.lines.flatMap { line ->
+                        val pieces = CommentText.wrapCode(line, width - 2 * CODE_BLOCK_PAD) { codeFm.stringWidth(it) }
+                        pieces.mapIndexed { i, piece -> piece to if (i < pieces.lastIndex) "" else "\n" }
                     }
-                    val height = rows.size * CODE_ROW_HEIGHT + 2 * CODE_BLOCK_VPAD
+                    val height = codeRows.size * CODE_ROW_HEIGHT + 2 * CODE_BLOCK_VPAD
                     y += CODE_BLOCK_GAP
                     roundedBox(x, y, width, height)
-                    rows.forEachIndexed { i, row ->
-                        text(row, x + CODE_BLOCK_PAD, color, codeFm.font, CODE_ROW_HEIGHT, y + CODE_BLOCK_VPAD + i * CODE_ROW_HEIGHT)
+                    val textX = x + CODE_BLOCK_PAD
+                    codeRows.forEachIndexed { i, (piece, separator) ->
+                        val top = y + CODE_BLOCK_VPAD + i * CODE_ROW_HEIGHT
+                        val xs = IntArray(piece.length + 1) { k -> textX + codeFm.stringWidth(piece.substring(0, k)) }
+                        val row = TextRow(group, top, CODE_ROW_HEIGHT, piece, xs, x + width, separator)
+                        paintSelection(row)
+                        text(piece, textX, color, codeFm.font, CODE_ROW_HEIGHT, top)
+                        rows += row
                     }
                     y += height + CODE_BLOCK_GAP
                 }
             }
+            rows.lastOrNull()?.takeIf { it.group == group }?.let { rows[rows.lastIndex] = it.copy(separator = "\n\n") }
         }
 
         /** A text link whose right edge is at [rightEdge]; returns its hit area. */
@@ -198,18 +250,18 @@ class CommentInlayRenderer(
         text(headerLabel(comment.author, startLine, line, comment.resolved), left, MUTED, smallFont)
         y += ROW_HEIGHT
 
-        body(comment.comment, left, textWidth)
+        body(comment.comment, left, textWidth, group = 0)
 
         replyEditAreas.clear()
         replyDeleteAreas.clear()
         replyCopyAreas.clear()
-        for (reply in comment.replies) {
+        comment.replies.forEachIndexed { replyIndex, reply ->
             y += REPLY_GAP
             val top = y
             val isAgent = reply.author.equals("agent", ignoreCase = true)
             text(if (isAgent) "✦ Agent" else "You", left + REPLY_INDENT, if (isAgent) AGENT else MUTED, smallFont)
             y += ROW_HEIGHT
-            body(reply.text, left + REPLY_INDENT, textWidth - REPLY_INDENT)
+            body(reply.text, left + REPLY_INDENT, textWidth - REPLY_INDENT, group = replyIndex + 1)
             val copy = link("Copy", right, MUTED)
             val delete = link("Delete", copy.x - LINK_GAP, DANGER)
             val edit = link("Edit", delete.x - LINK_GAP, MUTED)
@@ -239,6 +291,7 @@ class CommentInlayRenderer(
         editCommentArea = button("Edit", deleteX - BUTTON_GAP - buttonWidth("Edit"), ButtonStyle.DEFAULT)
         y += BUTTON_HEIGHT
 
+        if (g != null) textRows = rows
         return y + CARD_PADDING + MARGIN
     }
 
@@ -266,6 +319,38 @@ class CommentInlayRenderer(
                     ?.let { index -> comment.replies.getOrNull(index)?.let { copyToClipboard(it.text) } }
             }
         }
+    }
+
+    /** Starts a selection at [rel] (inlay coordinates); returns false when [rel] is not on comment text. */
+    internal fun startSelection(rel: Point, clickCount: Int): Boolean {
+        val pos = TextSelection.hit(textRows, rel.x, rel.y) ?: return false
+        val (anchor, focus) = when {
+            clickCount >= 3 -> TextSelection.group(textRows, pos)
+            clickCount == 2 -> TextSelection.word(textRows, pos)
+            else -> pos to pos
+        }
+        selectionAnchor = anchor
+        selectionFocus = focus
+        return true
+    }
+
+    internal fun extendSelection(rel: Point) {
+        if (selectionAnchor == null) return
+        selectionFocus = TextSelection.nearest(textRows, rel.x, rel.y) ?: return
+    }
+
+    /** Returns whether there was a selection to clear. */
+    internal fun clearSelection(): Boolean {
+        val had = selectedText() != null
+        selectionAnchor = null
+        selectionFocus = null
+        return had
+    }
+
+    internal fun selectedText(): String? {
+        val anchor = selectionAnchor ?: return null
+        val focus = selectionFocus ?: return null
+        return TextSelection.text(textRows, anchor, focus).takeIf { it.isNotEmpty() }
     }
 
     private fun copyToClipboard(text: String) {
@@ -320,6 +405,7 @@ class CommentInlayRenderer(
         private const val CODE_BLOCK_PAD = 10
         private const val CODE_BLOCK_VPAD = 6
         private const val CODE_BLOCK_GAP = 4
+        private const val SELECTION_EOL = 4
 
         private val ACCENT: Color get() = JBUI.CurrentTheme.Link.Foreground.ENABLED
         private val MUTED: Color get() = UIUtil.getContextHelpForeground()

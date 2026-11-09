@@ -14,6 +14,9 @@ import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseListener
+import com.intellij.openapi.editor.event.EditorMouseMotionListener
+import com.intellij.openapi.editor.event.SelectionEvent
+import com.intellij.openapi.editor.event.SelectionListener
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.CustomHighlighterRenderer
 import com.intellij.openapi.editor.markup.GutterIconRenderer
@@ -22,15 +25,18 @@ import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.RangeHighlighter
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.Key
 import com.intellij.ui.JBColor
 import com.intellij.util.Alarm
 import com.intellij.util.ui.JBUI
 import java.awt.Color
 import java.awt.Font
 import java.awt.Graphics
+import java.awt.Point
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.Icon
+import javax.swing.SwingUtilities
 
 class CommentInlayManager(
     private val editor: EditorEx,
@@ -49,6 +55,7 @@ class CommentInlayManager(
     private var updatingInlays = false
     private val expandedState = mutableMapOf<String, Boolean>()
     private val redrawAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, ownDisposable)
+    private var selectingInlay: Inlay<*>? = null
 
     init {
         // Highlight, inlay and gutter icon sit at offsets that shift with edits, but the line the
@@ -77,7 +84,33 @@ class CommentInlayManager(
         viewport.addComponentListener(resizeListener)
         Disposer.register(ownDisposable) { viewport.removeComponentListener(resizeListener) }
 
+        editor.putUserData(MANAGER_KEY, this)
+        Disposer.register(ownDisposable) { if (editor.getUserData(MANAGER_KEY) === this) editor.putUserData(MANAGER_KEY, null) }
+
+        // A press on comment text is consumed, so the editor neither moves the caret nor starts its own
+        // selection; the drag then selects inside the card. Presses on buttons stay unconsumed, as only
+        // those produce the mouseClicked the buttons react to.
         editor.addEditorMouseListener(object : EditorMouseListener {
+            override fun mousePressed(event: EditorMouseEvent) {
+                selectingInlay = null
+                val point = event.mouseEvent.point
+                val hit = inlays.values.firstOrNull { it.bounds?.contains(point) == true }
+                clearSelections(except = hit)
+                if (hit == null || !SwingUtilities.isLeftMouseButton(event.mouseEvent)) return
+                val renderer = hit.renderer as? CommentInlayRenderer ?: return
+                if (renderer.startSelection(relative(point, hit) ?: return, event.mouseEvent.clickCount)) {
+                    selectingInlay = hit
+                    event.consume()
+                } else {
+                    renderer.clearSelection()
+                }
+                hit.repaint()
+            }
+
+            override fun mouseReleased(event: EditorMouseEvent) {
+                selectingInlay = null
+            }
+
             override fun mouseClicked(event: EditorMouseEvent) {
                 val point = event.mouseEvent.point
                 // handleClick may call refresh(), which mutates `inlays` — iterate a snapshot.
@@ -92,8 +125,39 @@ class CommentInlayManager(
                 }
             }
         }, ownDisposable)
+
+        editor.addEditorMouseMotionListener(object : EditorMouseMotionListener {
+            override fun mouseDragged(event: EditorMouseEvent) {
+                val inlay = selectingInlay ?: return
+                val renderer = inlay.renderer as? CommentInlayRenderer ?: return
+                renderer.extendSelection(relative(event.mouseEvent.point, inlay) ?: return)
+                inlay.repaint()
+                event.consume()
+            }
+        }, ownDisposable)
+
+        // Selecting code with the keyboard must not leave a comment selection that Copy would prefer.
+        editor.selectionModel.addSelectionListener(object : SelectionListener {
+            override fun selectionChanged(e: SelectionEvent) {
+                if (!e.newRange.isEmpty) clearSelections()
+            }
+        }, ownDisposable)
         refresh()
     }
+
+    private fun relative(point: Point, inlay: Inlay<*>): Point? =
+        inlay.bounds?.let { Point(point.x - it.x, point.y - it.y) }
+
+    private fun clearSelections(except: Inlay<*>? = null) {
+        for (inlay in inlays.values) {
+            if (inlay === except) continue
+            if ((inlay.renderer as? CommentInlayRenderer)?.clearSelection() == true) inlay.repaint()
+        }
+    }
+
+    /** The comment text selected in one of this editor's cards, if any. */
+    fun selectedText(): String? =
+        inlays.values.firstNotNullOfOrNull { (it.renderer as? CommentInlayRenderer)?.selectedText() }
 
     override fun dispose() {
         inlays.values.forEach { it.dispose() }
@@ -219,7 +283,11 @@ class CommentInlayManager(
         }
     }
 
-    private companion object {
-        val COMMENTED_LINES_BACKGROUND = JBColor(Color(232, 240, 254), Color(40, 52, 77))
+    companion object {
+        private val MANAGER_KEY = Key.create<CommentInlayManager>("preflight.commentInlayManager")
+
+        fun forEditor(editor: Editor): CommentInlayManager? = editor.getUserData(MANAGER_KEY)
+
+        private val COMMENTED_LINES_BACKGROUND = JBColor(Color(232, 240, 254), Color(40, 52, 77))
     }
 }

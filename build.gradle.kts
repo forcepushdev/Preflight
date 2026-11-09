@@ -139,6 +139,12 @@ tasks {
         gradleVersion = providers.gradleProperty("gradleVersion").get()
     }
 
+    // The plugin cannot be unloaded cleanly, so a reload of a rebuilt jar leaves it half unloaded
+    // (actions and listeners gone). Restart the sandbox IDE instead.
+    runIde {
+        autoReload = false
+    }
+
     publishPlugin {
         dependsOn(patchChangelog)
     }
