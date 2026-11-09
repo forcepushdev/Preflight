@@ -1,7 +1,9 @@
 package com.forcepushdev.preflight.toolWindow
 
 import com.forcepushdev.preflight.services.PreflightComment
+import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorCustomElementRenderer
+import com.intellij.openapi.editor.colors.EditorFontType
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.TextAttributes
@@ -81,14 +83,23 @@ class CommentInlayRenderer(
 
     // Wrapping must measure exactly the same when sizing and when painting, otherwise paint produces
     // more rows than the inlay reserved and the buttons are drawn below the inlay, over the code.
-    private fun layoutMetrics(inlay: Inlay<*>): FontMetrics =
-        inlay.editor.contentComponent.getFontMetrics(UIUtil.getLabelFont())
+    private fun layoutMetrics(inlay: Inlay<*>): Metrics {
+        val component = inlay.editor.contentComponent
+        return Metrics(component.getFontMetrics(UIUtil.getLabelFont()), component.getFontMetrics(codeFont(inlay.editor)))
+    }
+
+    private class Metrics(val label: FontMetrics, val code: FontMetrics)
+
+    private fun codeFont(editor: Editor): Font =
+        editor.colorsScheme.getFont(EditorFontType.PLAIN).deriveFont(UIUtil.getLabelFont().size2D - 1f)
 
     /**
      * Lays out the card, painting it when [g] is given, and returns the height it takes.
      * Sizing and painting share this one pass so they cannot drift apart.
      */
-    private fun layout(g: Graphics2D?, r: Rectangle, fm: FontMetrics): Int {
+    private fun layout(g: Graphics2D?, r: Rectangle, metrics: Metrics): Int {
+        val fm = metrics.label
+        val codeFm = metrics.code
         val labelFont = UIUtil.getLabelFont()
         val smallFont = labelFont.deriveFont(labelFont.size - 1f)
         val left = MARGIN + ACCENT_BAR_WIDTH + CARD_PADDING
@@ -96,12 +107,56 @@ class CommentInlayRenderer(
         val textWidth = maxOf(right - left, 100)
         var y = MARGIN + CARD_PADDING
 
-        fun text(s: String, x: Int, color: Color, font: Font = labelFont, rowHeight: Int = ROW_HEIGHT) {
+        fun text(s: String, x: Int, color: Color, font: Font = labelFont, rowHeight: Int = ROW_HEIGHT, top: Int = y) {
             g ?: return
             g.font = font
             g.color = color
             val m = g.fontMetrics
-            g.drawString(s, r.x + x, r.y + y + (rowHeight - m.height) / 2 + m.ascent)
+            g.drawString(s, r.x + x, r.y + top + (rowHeight - m.height) / 2 + m.ascent)
+        }
+
+        fun roundedBox(x: Int, top: Int, width: Int, height: Int) {
+            g ?: return
+            g.color = CODE_BACKGROUND
+            g.fill(RoundRectangle2D.Float(
+                (r.x + x).toFloat(), (r.y + top).toFloat(), width.toFloat(), height.toFloat(), CODE_ARC.toFloat(), CODE_ARC.toFloat()
+            ))
+        }
+
+        fun runWidth(run: CommentText.Segment) =
+            if (run.isCode) codeFm.stringWidth(run.text) + 2 * CODE_PAD else fm.stringWidth(run.text)
+
+        /** Comment or reply text, with inline code and fenced code blocks drawn as code. */
+        fun body(source: String, x: Int, width: Int) {
+            val color = UIUtil.getLabelForeground()
+            for (block in CommentText.parse(source)) when (block) {
+                is CommentText.Prose -> for (row in CommentText.wrap(block.segments, width, ::runWidth)) {
+                    var cx = x
+                    for (run in row) {
+                        val w = runWidth(run)
+                        if (run.isCode) {
+                            roundedBox(cx, y + (ROW_HEIGHT - CODE_CHIP_HEIGHT) / 2, w, CODE_CHIP_HEIGHT)
+                            text(run.text, cx + CODE_PAD, color, codeFm.font)
+                        } else {
+                            text(run.text, cx, color)
+                        }
+                        cx += w
+                    }
+                    y += ROW_HEIGHT
+                }
+                is CommentText.Code -> {
+                    val rows = block.lines.flatMap { line ->
+                        CommentText.wrapCode(line, width - 2 * CODE_BLOCK_PAD) { codeFm.stringWidth(it) }
+                    }
+                    val height = rows.size * CODE_ROW_HEIGHT + 2 * CODE_BLOCK_VPAD
+                    y += CODE_BLOCK_GAP
+                    roundedBox(x, y, width, height)
+                    rows.forEachIndexed { i, row ->
+                        text(row, x + CODE_BLOCK_PAD, color, codeFm.font, CODE_ROW_HEIGHT, y + CODE_BLOCK_VPAD + i * CODE_ROW_HEIGHT)
+                    }
+                    y += height + CODE_BLOCK_GAP
+                }
+            }
         }
 
         /** A text link whose right edge is at [rightEdge]; returns its hit area. */
@@ -143,10 +198,7 @@ class CommentInlayRenderer(
         text(headerLabel(comment.author, startLine, line, comment.resolved), left, MUTED, smallFont)
         y += ROW_HEIGHT
 
-        for (wrapped in wrapLines(comment.comment, textWidth) { fm.stringWidth(it) }) {
-            text(wrapped, left, UIUtil.getLabelForeground())
-            y += ROW_HEIGHT
-        }
+        body(comment.comment, left, textWidth)
 
         replyEditAreas.clear()
         replyDeleteAreas.clear()
@@ -157,10 +209,7 @@ class CommentInlayRenderer(
             val isAgent = reply.author.equals("agent", ignoreCase = true)
             text(if (isAgent) "✦ Agent" else "You", left + REPLY_INDENT, if (isAgent) AGENT else MUTED, smallFont)
             y += ROW_HEIGHT
-            for (wrapped in wrapLines(reply.text, textWidth - REPLY_INDENT) { fm.stringWidth(it) }) {
-                text(wrapped, left + REPLY_INDENT, UIUtil.getLabelForeground())
-                y += ROW_HEIGHT
-            }
+            body(reply.text, left + REPLY_INDENT, textWidth - REPLY_INDENT)
             val copy = link("Copy", right, MUTED)
             val delete = link("Delete", copy.x - LINK_GAP, DANGER)
             val edit = link("Edit", delete.x - LINK_GAP, MUTED)
@@ -264,34 +313,24 @@ class CommentInlayRenderer(
         private const val BUTTON_PAD = 12
         private const val BUTTON_GAP = 8
         private const val COLLAPSE_ICON = "▼"
+        private const val CODE_PAD = 4
+        private const val CODE_ARC = 6
+        private const val CODE_CHIP_HEIGHT = 18
+        private const val CODE_ROW_HEIGHT = 18
+        private const val CODE_BLOCK_PAD = 10
+        private const val CODE_BLOCK_VPAD = 6
+        private const val CODE_BLOCK_GAP = 4
 
         private val ACCENT: Color get() = JBUI.CurrentTheme.Link.Foreground.ENABLED
         private val MUTED: Color get() = UIUtil.getContextHelpForeground()
         private val DANGER = JBColor(Color(0xDB, 0x3B, 0x4B), Color(0xF2, 0x6C, 0x78))
         private val AGENT = JBColor(Color(0x20, 0x8A, 0x3C), Color(0x5F, 0xB8, 0x65))
+        private val CODE_BACKGROUND = JBColor(Color(0, 0, 0, 0x14), Color(0xFF, 0xFF, 0xFF, 0x14))
 
         internal fun headerLabel(author: String?, startLine: Int, endLine: Int, resolved: Boolean): String {
             val who = if (author.equals("agent", ignoreCase = true)) "Agent" else "You"
             val lines = if (startLine == endLine) "Line ${startLine + 1}" else "Lines ${startLine + 1}–${endLine + 1}"
             return listOfNotNull(who, lines, "Resolved".takeIf { resolved }).joinToString(" · ")
-        }
-
-        internal fun wrapLines(text: String, maxWidth: Int, measure: (String) -> Int): List<String> {
-            if (maxWidth <= 0 || measure(text) <= maxWidth) return listOf(text)
-            val words = text.split(" ")
-            val lines = mutableListOf<String>()
-            var current = StringBuilder()
-            for (word in words) {
-                val candidate = if (current.isEmpty()) word else "$current $word"
-                if (measure(candidate) <= maxWidth) {
-                    current = StringBuilder(candidate)
-                } else {
-                    if (current.isNotEmpty()) lines.add(current.toString())
-                    current = StringBuilder(word)
-                }
-            }
-            if (current.isNotEmpty()) lines.add(current.toString())
-            return lines.ifEmpty { listOf(text) }
         }
     }
 }
