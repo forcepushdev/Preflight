@@ -3,6 +3,8 @@
 # Preflight Changelog
 
 ## [Unreleased]
+
+## [0.0.5] - 2026-11-12
 ### Added
 - Inline `code` and fenced ``` code blocks in comments and replies are rendered as code; line breaks in comments are kept.
 - Comment text can be selected with the mouse (double-click: word, triple-click: whole comment or reply) and copied with Copy.
@@ -10,7 +12,7 @@
 ### Changed
 - A comment whose lines were deleted or rewritten (e.g. by an agent fixing it) moves to the line where they were instead of becoming outdated. Only comments whose file no longer exists are outdated.
 - A comment whose stored line lies past the end of the file and whose text cannot be found is shown on the last line.
-- The outdated comments panel can be resized.
+- The outdated comments panel can be resized; its entries show file name, line and the first line of the comment, with the full text as tooltip.
 
 ## [0.0.4] - 2026-11-06
 ### Added
