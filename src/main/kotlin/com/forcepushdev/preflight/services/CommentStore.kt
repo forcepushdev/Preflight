@@ -67,8 +67,9 @@ class CommentStore(private val project: Project) {
     fun updateAnchor(id: String, startLine: Int, line: Int, anchorText: String?) =
         updateComment(id) { it.copy(startLine = startLine, line = line, anchorText = anchorText) }
 
-    fun getStaleComments(currentDiffFiles: Set<String>, orphanedIds: Set<String> = emptySet()): List<PreflightComment> =
-        comments.filter { (it.file !in currentDiffFiles || it.id in orphanedIds) && !it.resolved }
+    /** Open comments whose file no longer exists; every other comment can still be shown in its file. */
+    fun getStaleComments(fileExists: (String) -> Boolean): List<PreflightComment> =
+        comments.filter { !it.resolved && !fileExists(it.file) }
 
     fun reload() {
         comments.clear()

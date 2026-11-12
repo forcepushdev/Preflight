@@ -71,30 +71,29 @@ class CommentAnchorRegistryTest : BasePlatformTestCase() {
         assertEquals(4, store.getComment(comment.id)!!.line)
     }
 
-    fun testIsOrphaned_reportedAfterFlush_whenAnchoredLineDeleted() {
-        val comment = PreflightComment("Foo.kt", 1, "text")
+    fun testAnchoredLineDeleted_commentMovesToNeighbourLine_andIsPersisted() {
+        val comment = PreflightComment("Foo.kt", 1, "text", startLine = 1, anchorText = "b")
         store.addComment(comment)
         val doc = document("a\nb\nc\n")
         registry.register(doc, comment)
-        val lineStart = doc.getLineStartOffset(1)
-        val lineEnd = doc.getLineEndOffset(1)
 
-        write { doc.deleteString(lineStart, lineEnd) }
+        write { doc.deleteString(doc.getLineStartOffset(1), doc.getLineStartOffset(2)) }
         waitForDebounce()
 
-        assertTrue(registry.isOrphaned(comment.id))
+        val saved = store.getComment(comment.id)!!
+        assertEquals(1, saved.line)
+        assertEquals(1, saved.startLine)
+        assertEquals("c", saved.anchorText)
     }
 
-    fun testIsOrphaned_false_whenAnchorUntouched() {
-        val comment = PreflightComment("Foo.kt", 1, "text")
+    fun testRegister_linePastEndOfFile_andTextNotFound_showsOnLastLine() {
+        val comment = PreflightComment("Foo.kt", 9, "text", startLine = 1, anchorText = "gone")
         store.addComment(comment)
-        val doc = document("a\nb\nc\n")
+        val doc = document("a\nb\nc")
+
         registry.register(doc, comment)
 
-        write { doc.insertString(doc.textLength, "more\n") }
-        waitForDebounce()
-
-        assertFalse(registry.isOrphaned(comment.id))
+        assertEquals(2..2, registry.currentRange(doc, comment.id))
     }
 
     fun testFlush_writesStartLineAndAnchorText_notJustEndLine() {
@@ -161,7 +160,6 @@ class CommentAnchorRegistryTest : BasePlatformTestCase() {
         registry.register(doc, comment)
 
         assertEquals(1, registry.currentLine(doc, comment.id))
-        assertFalse(registry.isOrphaned(comment.id))
     }
 
     fun testRegister_isIdempotent_andKeepsLiveAnchor_whenStoreIsStale() {

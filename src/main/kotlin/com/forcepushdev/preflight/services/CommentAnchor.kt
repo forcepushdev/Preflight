@@ -6,51 +6,72 @@ import com.intellij.openapi.editor.RangeMarker
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.util.TextRange
 
-class CommentAnchor(document: Document, startLine: Int, endLine: Int) {
+class CommentAnchor(private val document: Document, startLine: Int, endLine: Int) {
 
-    private val hadContent =
-        document.getLineEndOffset(endLine) > document.getLineStartOffset(startLine)
+    private var hadContent = false
+    private lateinit var marker: RangeMarker
+
+    // The last range the marker covered, to fall back on should the marker ever be invalidated.
+    private var lastEndLine = endLine
+
+    init {
+        anchor(startLine, endLine)
+    }
 
     // surviveOnExternalChange: when a file is rewritten on disk (an agent editing it while
     // IntelliJ is open) the document is reloaded as a whole; a plain marker would be invalidated,
     // a persistent one is re-mapped through a diff of old and new text.
-    private val marker: RangeMarker = document.createRangeMarker(
-        document.getLineStartOffset(startLine),
-        document.getLineEndOffset(endLine),
-        true
-    )
+    private fun anchor(startLine: Int, endLine: Int) {
+        hadContent = document.getLineEndOffset(endLine) > document.getLineStartOffset(startLine)
+        marker = document.createRangeMarker(
+            document.getLineStartOffset(startLine),
+            document.getLineEndOffset(endLine),
+            true
+        )
+    }
+
+    /**
+     * The live marker. When the anchored text was deleted or replaced as a whole (typically an agent
+     * rewriting exactly the commented lines) the marker collapses; the comment then moves to the line
+     * it collapsed on rather than getting lost.
+     */
+    private fun liveMarker(): RangeMarker = synchronized(this) {
+        val current = marker
+        val collapsed = current.isValid && hadContent && current.startOffset == current.endOffset
+        if (current.isValid && !collapsed) {
+            lastEndLine = document.getLineNumber(current.endOffset)
+            return current
+        }
+        val line = if (current.isValid) {
+            document.getLineNumber(current.startOffset)
+        } else {
+            lastEndLine.coerceIn(0, maxOf(0, document.lineCount - 1))
+        }
+        current.dispose()
+        anchor(line, line)
+        lastEndLine = line
+        marker
+    }
 
     // RangeMarker.getDocument()/getLineNumber() resolve through FileDocumentManager, which
     // asserts read access even when already on EDT — callers may run on EDT (button click
     // handlers) or a pooled thread (CommentAnchorRegistry's debounced flush), neither of which
     // holds an implicit read lock, so this must always acquire one explicitly.
-    val isOrphaned: Boolean
-        get() = readAccess {
-            !marker.isValid || (hadContent && marker.startOffset == marker.endOffset)
-        }
 
     // currentLine tracks the END of the anchored range (comment.line), not the start: the
-    // inlay/gutter icon renders at the end line, and CommentInlayManager derives the highlight's
-    // start by subtracting the original span from this value (see CommentInlayManager.refresh).
-    val currentLine: Int?
-        get() = readAccess {
-            if (isOrphaned) null else marker.document.getLineNumber(marker.endOffset)
-        }
+    // inlay/gutter icon renders at the end line.
+    val currentLine: Int
+        get() = readAccess { document.getLineNumber(liveMarker().endOffset) }
 
-    val currentStartLine: Int?
-        get() = readAccess {
-            if (isOrphaned) null else marker.document.getLineNumber(marker.startOffset)
-        }
+    val currentStartLine: Int
+        get() = readAccess { document.getLineNumber(liveMarker().startOffset) }
 
     // Full text of the anchored lines, persisted as `anchorText` so the comment can be re-found by
     // content if line numbers go stale (see AnchorRelocator).
-    val currentText: String?
+    val currentText: String
         get() = readAccess {
-            if (isOrphaned) null
-            else marker.document.lineRangeText(
-                marker.document.getLineNumber(marker.startOffset),
-                marker.document.getLineNumber(marker.endOffset)
-            )
+            val live = liveMarker()
+            document.lineRangeText(document.getLineNumber(live.startOffset), document.getLineNumber(live.endOffset))
         }
 }
 

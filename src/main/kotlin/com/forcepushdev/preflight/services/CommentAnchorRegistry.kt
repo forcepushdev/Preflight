@@ -13,8 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Tracks a Comment Anchor per open (document, comment) pair and, after a quiet period following
- * document edits, writes the live line position back to the CommentStore (debounced, see ADR 0002)
- * and flags anchors whose content was deleted as orphaned.
+ * document edits, writes the live line position back to the CommentStore (debounced, see ADR 0002).
  */
 @Service(Service.Level.PROJECT)
 class CommentAnchorRegistry @JvmOverloads constructor(
@@ -37,13 +36,15 @@ class CommentAnchorRegistry @JvmOverloads constructor(
     // Accessed from the EDT (register) and the pooled flush thread.
     private val anchors = ConcurrentHashMap<Key, Entry>()
     private val listenedDocuments = mutableSetOf<Document>()
-    private val orphanedIds = mutableSetOf<String>()
     private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
 
     fun register(document: Document, comment: PreflightComment) {
         val lastLine = maxOf(0, document.lineCount - 1)
-        val storedStart = (comment.startLine ?: comment.line).coerceIn(0, lastLine)
+        // A stored position past the end of the file (it was shortened) puts the comment on the last
+        // line, unless anchorText re-finds it below.
+        val pastEnd = comment.line > lastLine
         val storedEnd = comment.line.coerceIn(0, lastLine)
+        val storedStart = if (pastEnd) storedEnd else (comment.startLine ?: comment.line).coerceIn(0, storedEnd)
         val key = Key(document, comment.id)
 
         val existing = anchors[key]
@@ -82,14 +83,8 @@ class CommentAnchorRegistry @JvmOverloads constructor(
     /** Live start..end line of the comment; unlike the stored values it is correct between an edit and the next flush. */
     fun currentRange(document: Document, commentId: String): IntRange? {
         val anchor = anchors[Key(document, commentId)]?.anchor ?: return null
-        val start = anchor.currentStartLine ?: return null
-        val end = anchor.currentLine ?: return null
-        return start..end
+        return anchor.currentStartLine..anchor.currentLine
     }
-
-    fun isOrphaned(commentId: String): Boolean = commentId in orphanedIds
-
-    fun orphanedIds(): Set<String> = orphanedIds.toSet()
 
     private fun scheduleFlush() {
         alarm.cancelAllRequests()
@@ -98,15 +93,10 @@ class CommentAnchorRegistry @JvmOverloads constructor(
 
     private fun flush() {
         val store = project.service<CommentStore>()
-        orphanedIds.clear()
         for ((key, entry) in anchors) {
             val anchor = entry.anchor
-            if (anchor.isOrphaned) {
-                orphanedIds += key.commentId
-                continue
-            }
-            val start = anchor.currentStartLine ?: continue
-            val end = anchor.currentLine ?: continue
+            val start = anchor.currentStartLine
+            val end = anchor.currentLine
             val text = anchor.currentText
             if (start == entry.storedStart && end == entry.storedEnd && text == entry.storedText) continue
             store.updateAnchor(key.commentId, start, end, text)

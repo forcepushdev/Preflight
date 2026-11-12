@@ -88,30 +88,13 @@ class CommentStoreTest : BasePlatformTestCase() {
         assertTrue(File("${project.basePath}/.preflight/comments.json").exists())
     }
 
-    fun testGetStaleComments_fileNotInDiff() {
+    fun testGetStaleComments_fileGone_isStale() {
         store.addComment(PreflightComment("src/Gone.kt", 5, "Old"))
-
-        val stale = store.getStaleComments(setOf("src/Foo.kt"))
-
-        assertEquals(1, stale.size)
-        assertEquals("src/Gone.kt", stale[0].file)
-    }
-
-    fun testGetStaleComments_fileInDiff_notStale() {
         store.addComment(PreflightComment("src/Foo.kt", 5, "Current"))
 
-        val stale = store.getStaleComments(setOf("src/Foo.kt"))
+        val stale = store.getStaleComments { it == "src/Foo.kt" }
 
-        assertTrue(stale.isEmpty())
-    }
-
-    fun testGetStaleComments_emptyDiff_allStale() {
-        store.addComment(PreflightComment("src/Foo.kt", 5, "X"))
-        store.addComment(PreflightComment("src/Bar.kt", 10, "Y"))
-
-        val stale = store.getStaleComments(emptySet())
-
-        assertEquals(2, stale.size)
+        assertEquals(listOf("src/Gone.kt"), stale.map { it.file })
     }
 
     fun testPreflightComment_defaultsResolvedFalse_repliesEmpty() {
@@ -202,29 +185,10 @@ class CommentStoreTest : BasePlatformTestCase() {
         store.addComment(PreflightComment("src/Gone.kt", 5, "Old", resolved = true))
         store.addComment(PreflightComment("src/Gone.kt", 6, "Active"))
 
-        val stale = store.getStaleComments(emptySet())
+        val stale = store.getStaleComments { false }
 
         assertEquals(1, stale.size)
         assertFalse(stale[0].resolved)
-    }
-
-    fun testGetStaleComments_orphanedAnchor_staleEvenWhenFileInDiff() {
-        val comment = PreflightComment("src/Foo.kt", 5, "Current")
-        store.addComment(comment)
-
-        val stale = store.getStaleComments(setOf("src/Foo.kt"), orphanedIds = setOf(comment.id))
-
-        assertEquals(1, stale.size)
-        assertEquals(comment.id, stale[0].id)
-    }
-
-    fun testGetStaleComments_orphanedAnchor_excludesResolved() {
-        val comment = PreflightComment("src/Foo.kt", 5, "Current", resolved = true)
-        store.addComment(comment)
-
-        val stale = store.getStaleComments(setOf("src/Foo.kt"), orphanedIds = setOf(comment.id))
-
-        assertTrue(stale.isEmpty())
     }
 
     fun testRemoveReply_removesOnlyThatReply() {

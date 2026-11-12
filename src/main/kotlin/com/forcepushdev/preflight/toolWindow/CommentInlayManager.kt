@@ -179,11 +179,14 @@ class CommentInlayManager(
         val lastLine = (editor.document.lineCount - 1).coerceAtLeast(0)
         store.getCommentsForFile(file).forEach { comment ->
             anchorRegistry?.register(editor.document, comment)
-            if (anchorRegistry?.isOrphaned(comment.id) == true) return@forEach
 
             val liveRange = anchorRegistry?.currentRange(editor.document, comment.id)
             val renderLine = (liveRange?.last ?: comment.line).coerceIn(0, lastLine)
-            val startLine = (liveRange?.first ?: comment.startLine ?: comment.line).coerceIn(0, renderLine)
+            val startLine = when {
+                liveRange != null -> liveRange.first.coerceIn(0, renderLine)
+                comment.line > lastLine -> renderLine
+                else -> (comment.startLine ?: comment.line).coerceIn(0, renderLine)
+            }
             val isExpanded = expandedState.getOrPut(comment.id) { initiallyExpanded(comment) }
             if (isExpanded) {
                 val offset = editor.document.getLineEndOffset(renderLine)

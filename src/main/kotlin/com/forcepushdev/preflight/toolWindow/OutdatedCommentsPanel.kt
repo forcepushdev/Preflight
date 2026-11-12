@@ -9,6 +9,7 @@ import java.awt.BorderLayout
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JPanel
+import javax.swing.ScrollPaneConstants
 
 class OutdatedCommentsPanel(
     private val store: CommentStore,
@@ -24,7 +25,7 @@ class OutdatedCommentsPanel(
             add(JBLabel("Outdated Comments").apply { border = JBUI.Borders.empty(4, 8) }, BorderLayout.WEST)
         }
         add(headerRow, BorderLayout.NORTH)
-        add(JBScrollPane(listPanel), BorderLayout.CENTER)
+        add(JBScrollPane(listPanel, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER), BorderLayout.CENTER)
         isVisible = false
     }
 
@@ -40,9 +41,12 @@ class OutdatedCommentsPanel(
 
     private fun createRow(comment: PreflightComment): JPanel =
         JPanel(BorderLayout()).apply {
+            // Stored lines are 0-based; the label shows them as editors do.
+            val location = "${comment.file.substringAfterLast('/')}:${comment.line + 1}"
             add(
-                JBLabel("${comment.file}:${comment.line} – ${comment.comment}").apply {
+                JBLabel("$location – ${comment.comment.lineSequence().first()}").apply {
                     border = JBUI.Borders.empty(2, 8)
+                    toolTipText = "${comment.file}:${comment.line + 1} – ${comment.comment}"
                 },
                 BorderLayout.CENTER
             )

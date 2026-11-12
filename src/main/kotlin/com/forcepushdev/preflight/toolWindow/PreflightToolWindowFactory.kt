@@ -40,6 +40,7 @@ import com.intellij.openapi.vcs.changes.ChangeListAdapter
 import com.intellij.openapi.vcs.changes.ChangeListManager
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.PopupHandler
 import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.SearchTextField
@@ -58,6 +59,7 @@ import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.event.MouseEvent
+import java.io.File
 import com.intellij.util.ui.JBUI
 import javax.swing.JButton
 import javax.swing.JLabel
@@ -378,9 +380,11 @@ private class PreflightPanel(
             true
         ).also { it.targetComponent = this }
 
-        val leftPanel = JPanel(BorderLayout()).apply {
-            add(JBScrollPane(fileTree), BorderLayout.CENTER)
-            add(outdatedPanel, BorderLayout.SOUTH)
+        // A splitter so the outdated comments can be given more room; while there are none the panel is
+        // hidden and the tree takes the whole height.
+        val leftPanel = OnePixelSplitter(true, OUTDATED_SPLITTER_KEY, 0.75f).apply {
+            firstComponent = JBScrollPane(fileTree)
+            secondComponent = outdatedPanel
         }
 
         add(buildTopPanel(toolbar), BorderLayout.NORTH)
@@ -509,7 +513,7 @@ private class PreflightPanel(
     private fun commentPositions(file: String, editor: EditorEx?): List<CommentPosition> {
         val registry = project.service<CommentAnchorRegistry>()
         return commentStore.getCommentsForFile(file)
-            .filter { !it.resolved && !registry.isOrphaned(it.id) }
+            .filter { !it.resolved }
             .map { comment ->
                 // The open file's anchors track edits made since the last flush to comments.json.
                 val live = if (file == currentFile && editor != null) registry.currentRange(editor.document, comment.id) else null
@@ -657,8 +661,9 @@ private class PreflightPanel(
                 }.toSet()
                 changedFiles = changedFilePaths
                 recomputeReviewed()
-                val orphanedIds = project.service<CommentAnchorRegistry>().orphanedIds()
-                outdatedPanel.refresh(commentStore.getStaleComments(changedFilePaths, orphanedIds))
+                // Comment paths are relative to the repository root (diff) or the project dir (main editor).
+                val roots = listOfNotNull(repoRoot, project.basePath)
+                outdatedPanel.refresh(commentStore.getStaleComments { file -> roots.isEmpty() || roots.any { File(it, file).exists() } })
                 project.service<ReviewNavigationService>().register(this, disposable)
                 if (fallbackTriggered) notifyBaseCommitFallback(effectiveDiffBase)
             }
@@ -893,3 +898,5 @@ private class FileChangeTreeCellRenderer(
 }
 
 private val REVIEWED_COLOR = JBColor(Color(0x2E7D32), Color(0x81C784))
+
+private const val OUTDATED_SPLITTER_KEY = "Preflight.OutdatedCommentsSplitter"

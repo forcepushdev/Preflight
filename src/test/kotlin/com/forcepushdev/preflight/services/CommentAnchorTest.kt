@@ -17,7 +17,6 @@ class CommentAnchorTest : BasePlatformTestCase() {
         val anchor = CommentAnchor(doc, 1, 1)
 
         assertEquals(1, anchor.currentLine)
-        assertFalse(anchor.isOrphaned)
     }
 
     fun testCurrentLine_shiftsDown_whenTextInsertedAbove() {
@@ -27,7 +26,6 @@ class CommentAnchorTest : BasePlatformTestCase() {
         write { doc.insertString(0, "new line\n") }
 
         assertEquals(2, anchor.currentLine)
-        assertFalse(anchor.isOrphaned)
     }
 
     fun testCurrentLine_staysPut_whenTextChangedBelow() {
@@ -37,38 +35,55 @@ class CommentAnchorTest : BasePlatformTestCase() {
         write { doc.insertString(doc.textLength, "more text\n") }
 
         assertEquals(1, anchor.currentLine)
-        assertFalse(anchor.isOrphaned)
     }
 
-    fun testIsOrphaned_whenAnchoredLineContentFullyDeleted() {
+    fun testReanchors_onLine_whenAnchoredLineContentFullyDeleted() {
         val doc = document("a\nb\nc\n")
         val anchor = CommentAnchor(doc, 1, 1) // anchored on "b"
-        val lineStart = doc.getLineStartOffset(1)
-        val lineEnd = doc.getLineEndOffset(1)
 
-        write { doc.deleteString(lineStart, lineEnd) }
+        write { doc.deleteString(doc.getLineStartOffset(1), doc.getLineEndOffset(1)) }
 
-        assertTrue(anchor.isOrphaned)
-        assertNull(anchor.currentLine)
+        assertEquals(1, anchor.currentStartLine)
+        assertEquals(1, anchor.currentLine)
     }
 
-    fun testNotOrphaned_whenLineMergedButContentSurvives() {
+    fun testReanchors_onNeighbourLine_whenWholeLineIncludingBreakDeleted() {
+        val doc = document("a\nb\nc\n")
+        val anchor = CommentAnchor(doc, 1, 1) // anchored on "b"
+
+        write { doc.deleteString(doc.getLineStartOffset(1), doc.getLineStartOffset(2)) }
+
+        assertEquals(1, anchor.currentLine)
+        assertEquals("c", anchor.currentText)
+    }
+
+    fun testReanchors_whenExternalRewriteReplacesAnchoredLine() {
+        // An agent fixing the comment rewrites exactly the commented line while the file is open.
+        val doc = document("val x =\n    a - b - c\n\nfun f() = x\n")
+        val anchor = CommentAnchor(doc, 1, 1) // "    a - b - c"
+
+        write { doc.setText("val x = buildSet {\n    addAll(a)\n    removeAll(b)\n}\n\nfun f() = x\n") }
+
+        val line = anchor.currentLine
+        assertTrue("re-anchored near the rewrite, was $line", line in 0..4)
+        assertEquals(line, anchor.currentStartLine)
+    }
+
+    fun testLineMerged_contentSurvives() {
         val doc = document("a\nb\nc\n")
         val anchor = CommentAnchor(doc, 1, 1) // anchored on "b"
 
         // Delete just the newline before "b", merging it onto line 0 as "ab"
         write { doc.deleteString(doc.getLineEndOffset(0), doc.getLineEndOffset(0) + 1) }
 
-        assertFalse(anchor.isOrphaned)
         assertEquals(0, anchor.currentLine)
     }
 
-    fun testNotOrphaned_forOriginallyEmptyLine() {
+    fun testOriginallyEmptyLine_staysAnchored() {
         val doc = document("a\n\nc\n") // line 1 is empty
 
         val anchor = CommentAnchor(doc, 1, 1)
 
-        assertFalse(anchor.isOrphaned)
         assertEquals(1, anchor.currentLine)
     }
 
@@ -115,13 +130,13 @@ class CommentAnchorTest : BasePlatformTestCase() {
         assertEquals("b!", anchor.currentText)
     }
 
-    fun testCurrentText_nullWhenOrphaned() {
+    fun testCurrentText_afterReanchor_isTextOfNewLine() {
         val doc = document("a\nb\nc\n")
         val anchor = CommentAnchor(doc, 1, 1)
 
         write { doc.deleteString(doc.getLineStartOffset(1), doc.getLineEndOffset(1)) }
 
-        assertNull(anchor.currentText)
+        assertEquals("", anchor.currentText)
     }
 
     fun testLineRangeText_coercesOutOfRangeLines() {
@@ -137,7 +152,6 @@ class CommentAnchorTest : BasePlatformTestCase() {
         // Simulates an external tool (e.g. an agent) rewriting the file on disk and IntelliJ reloading it.
         write { doc.setText("x\ny\na\nb\nc\nd\n") }
 
-        assertFalse(anchor.isOrphaned)
         assertEquals(4, anchor.currentLine)
     }
 
@@ -147,7 +161,6 @@ class CommentAnchorTest : BasePlatformTestCase() {
 
         write { doc.insertString(doc.getLineStartOffset(2), "new\n") } // between b and c
 
-        assertFalse(anchor.isOrphaned)
         assertEquals(1, anchor.currentStartLine)
         assertEquals(4, anchor.currentLine)
         assertEquals("b\nnew\nc\nd", anchor.currentText)
